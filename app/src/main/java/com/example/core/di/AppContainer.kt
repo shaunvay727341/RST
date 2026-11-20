@@ -80,4 +80,8 @@ class AppContainer(context: Context) {
   val settingsRepository: SettingsRepository by lazy {
     SettingsRepository(firestore, storageRepository, e2eeCryptoManager)
   }
+
+  val groupRepository: com.example.feature.group.GroupRepository by lazy {
+    com.example.feature.group.GroupRepository(firestore)
+  }
 }

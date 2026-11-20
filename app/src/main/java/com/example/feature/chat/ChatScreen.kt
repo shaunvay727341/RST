@@ -8,11 +8,18 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +31,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -31,8 +39,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Forward
@@ -50,15 +60,20 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -71,11 +86,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,25 +102,34 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.core.model.FriendConnection
+import com.example.core.model.GroupThread
 import com.example.core.model.MessageType
 import com.example.feature.friends.QuickMessagesPickerDialog
+import com.example.ui.components.GlassCard
 import com.example.ui.components.UserAvatar
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -117,11 +143,17 @@ fun ChatScreen(
   onStartAudioCall: () -> Unit,
   onStartVideoCall: () -> Unit,
   onBack: () -> Unit,
+  onAddFriend: (() -> Unit)? = null,
+  groupsList: List<GroupThread> = emptyList(),
+  onForwardToGroup: (GroupThread) -> Unit = {},
 ) {
   val state by viewModel.uiState.collectAsStateWithLifecycle()
   val context = LocalContext.current
   val isDark = isSystemInDarkTheme()
   val snackbarHostState = remember { SnackbarHostState() }
+  val listState = rememberLazyListState()
+  val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+  val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
 
   var showOverflow by remember { mutableStateOf(false) }
   var showDisappearingDialog by remember { mutableStateOf(false) }
@@ -130,7 +162,15 @@ fun ChatScreen(
   var showQuickMsgDialog by remember { mutableStateOf(false) }
   var showForwardDialog by remember { mutableStateOf(false) }
   var showSafetyDialog by remember { mutableStateOf(false) }
+  var showOldChatLimitDialog by remember { mutableStateOf(false) }
   var activeActionMsg by remember { mutableStateOf<DecryptedChatMessage?>(null) }
+
+  val isOldChatLocked =
+    state.thread?.chatMode == "OLD_CHAT" && state.thread?.oldChatUnlocked == false
+  val isOldChatInitiator = state.thread?.oldChatInitiatorUid == myUid
+  val oldChatLimit = (state.thread?.oldChatMessageLimit ?: 3L).coerceAtLeast(1L)
+  val oldChatSent = state.thread?.oldChatSentCount ?: 0L
+  val oldChatLimitReached = isOldChatLocked && isOldChatInitiator && oldChatSent >= oldChatLimit
 
   // Voice recording & playback
   var hasMicPermission by remember {
@@ -223,8 +263,10 @@ fun ChatScreen(
   if (showForwardDialog) {
     ForwardMessagesDialog(
       friends = friendsList,
+      groups = groupsList,
       selectedCount = state.selectedMessageIds.size,
       onSelectFriend = viewModel::forwardSelectedToFriend,
+      onSelectGroup = onForwardToGroup,
       onDismiss = { showForwardDialog = false },
     )
   }
@@ -233,6 +275,43 @@ fun ChatScreen(
       peerName = state.peerName,
       fingerprint = state.safetyFingerprint,
       onDismiss = { showSafetyDialog = false },
+    )
+  }
+  if (showOldChatLimitDialog) {
+    var limitInput by remember { mutableStateOf(oldChatLimit.toString()) }
+    AlertDialog(
+      onDismissRequest = { showOldChatLimitDialog = false },
+      title = { Text("Adjust Old Chat Limit") },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            "Choose how many starter messages ${state.peerName} can send before your reply unlocks unlimited chat (1-100).",
+            style = MaterialTheme.typography.bodySmall,
+          )
+          OutlinedTextField(
+            value = limitInput,
+            onValueChange = { ch -> limitInput = ch.filter { it.isDigit() }.take(3) },
+            label = { Text("Message Limit") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth().testTag("old_chat_limit_input"),
+          )
+        }
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            val parsed = (limitInput.toIntOrNull() ?: 3).coerceIn(1, 100)
+            viewModel.updateOldChatLimit(parsed)
+            showOldChatLimitDialog = false
+          }
+        ) {
+          Text("Save")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { showOldChatLimitDialog = false }) { Text("Cancel") }
+      },
     )
   }
 
@@ -339,6 +418,21 @@ fun ChatScreen(
             }
           },
           actions = {
+            if (!state.isPeerFriend && onAddFriend != null) {
+              FilledTonalButton(
+                onClick = onAddFriend,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.padding(end = 4.dp).testTag("chat_add_friend_btn"),
+              ) {
+                Icon(
+                  Icons.Default.PersonAdd,
+                  contentDescription = "Add friend",
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Add", style = MaterialTheme.typography.labelMedium)
+              }
+            }
             IconButton(
               onClick = onStartAudioCall,
               modifier = Modifier.minimumInteractiveComponentSize().testTag("chat_audio_call_btn"),
@@ -394,12 +488,26 @@ fun ChatScreen(
               }
             }
           },
+          colors =
+            TopAppBarDefaults.topAppBarColors(
+              containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+            ),
         )
       }
     },
     bottomBar = {
-      Surface(tonalElevation = 3.dp) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+      Surface(
+        tonalElevation = 4.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+      ) {
+        Column(
+          modifier =
+            Modifier.fillMaxWidth()
+              .animateContentSize(
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium)
+              )
+              .padding(horizontal = 8.dp, vertical = 6.dp)
+        ) {
           state.replyToMessage?.let { reply ->
             Row(
               modifier =
@@ -450,12 +558,14 @@ fun ChatScreen(
           ) {
             IconButton(
               onClick = { showQuickMsgDialog = true },
+              enabled = !oldChatLimitReached,
               modifier = Modifier.minimumInteractiveComponentSize().testTag("chat_quick_msg_btn"),
             ) {
               Icon(Icons.Default.Bolt, contentDescription = "Quick messages")
             }
             IconButton(
               onClick = { showStickerDialog = true },
+              enabled = !oldChatLimitReached,
               modifier = Modifier.minimumInteractiveComponentSize().testTag("chat_sticker_btn"),
             ) {
               Icon(Icons.Default.EmojiEmotions, contentDescription = "Stickers & GIFs")
@@ -466,6 +576,7 @@ fun ChatScreen(
                   PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
               },
+              enabled = !oldChatLimitReached,
               modifier = Modifier.minimumInteractiveComponentSize().testTag("chat_image_btn"),
             ) {
               Icon(Icons.Default.Image, contentDescription = "Share image")
@@ -473,8 +584,15 @@ fun ChatScreen(
             OutlinedTextField(
               value = state.composerText,
               onValueChange = viewModel::onComposerChanged,
+              enabled = !oldChatLimitReached,
               placeholder = {
-                Text(if (isRecordingVoice) "Recording ${voiceElapsedMs / 1000}s…" else "Message…")
+                Text(
+                  when {
+                    oldChatLimitReached -> "Waiting for ${state.peerName} to reply…"
+                    isRecordingVoice -> "Recording ${voiceElapsedMs / 1000}s…"
+                    else -> "Message…"
+                  }
+                )
               },
               maxLines = 4,
               shape = RoundedCornerShape(24.dp),
@@ -482,6 +600,7 @@ fun ChatScreen(
             )
             if (state.composerText.isBlank()) {
               IconButton(
+                enabled = !oldChatLimitReached,
                 onClick = {
                   if (!hasMicPermission) {
                     micLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -528,6 +647,7 @@ fun ChatScreen(
               }
             } else {
               IconButton(
+                enabled = !oldChatLimitReached,
                 onClick = viewModel::sendTextOrSaveEdit,
                 modifier = Modifier.minimumInteractiveComponentSize().testTag("chat_send_btn"),
               ) {
@@ -543,19 +663,78 @@ fun ChatScreen(
       }
     },
   ) { innerPadding ->
-    Box(
+    Column(
       modifier =
         Modifier.fillMaxSize()
           .background(Brush.verticalGradient(bgColors))
           .padding(innerPadding)
     ) {
+      if (isOldChatLocked) {
+        GlassCard(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+          cornerRadius = 16.dp,
+          containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text =
+                  if (isOldChatInitiator) {
+                    if (oldChatLimitReached) "Starter limit reached ($oldChatSent/$oldChatLimit)"
+                    else "Old Chat · $oldChatSent / $oldChatLimit starter messages used"
+                  } else {
+                    "Old Chat Request · $oldChatSent / $oldChatLimit sent"
+                  },
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+              Text(
+                text =
+                  if (isOldChatInitiator) "Unlocks unlimited chat once ${state.peerName} replies."
+                  else "Reply once to unlock unlimited chat, or customize starter limit.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+              )
+            }
+            if (!isOldChatInitiator) {
+              TextButton(
+                onClick = { showOldChatLimitDialog = true },
+                modifier = Modifier.testTag("old_chat_set_limit_btn"),
+              ) {
+                Icon(
+                  Icons.Default.Tune,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Limit")
+              }
+            }
+          }
+        }
+      }
+
       val msgs = state.messages
       val msgLookup = remember(msgs) { msgs.associateBy { it.id } }
 
+      LaunchedEffect(msgs.size) {
+        if (msgs.isNotEmpty()) {
+          val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+          if (lastVisible >= msgs.size - 4 || listState.firstVisibleItemIndex == 0) {
+            listState.animateScrollToItem(msgs.lastIndex)
+          }
+        }
+      }
+
       LazyColumn(
+        state = listState,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxSize().testTag("chat_messages_list"),
+        modifier = Modifier.weight(1f).fillMaxWidth().testTag("chat_messages_list"),
       ) {
         if (msgs.size >= state.pageLimit) {
           item {
@@ -571,7 +750,7 @@ fun ChatScreen(
           val showDateSeparator =
             idx == 0 || !isSameDay(msgs[idx - 1].createdAtMillis, msg.createdAtMillis)
           if (showDateSeparator) {
-            DateSeparatorChip(timestampMillis = msg.createdAtMillis)
+            DateSeparatorChip(timestampMillis = msg.createdAtMillis, dateFormat = dateFormat)
           }
 
           val isMine = msg.senderUid == myUid
@@ -585,8 +764,10 @@ fun ChatScreen(
             accentColor = accent.bubbleColor,
             replySnippet = replySnippet,
             translatedText = translated,
+            formattedTime = remember(msg.createdAtMillis) { timeFormat.format(Date(msg.createdAtMillis)) },
             isSelected = isSelected,
             isPlayingVoice = playingMessageId == msg.id,
+            onSwipeReply = { viewModel.setReplyTarget(msg) },
             onTogglePlayVoice = {
               val url = msg.mediaUrl
               if (url != null) {
@@ -629,7 +810,7 @@ fun ChatScreen(
 }
 
 @Composable
-private fun DateSeparatorChip(timestampMillis: Long) {
+private fun DateSeparatorChip(timestampMillis: Long, dateFormat: SimpleDateFormat) {
   Box(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
     Surface(
       shape = RoundedCornerShape(12.dp),
@@ -637,7 +818,7 @@ private fun DateSeparatorChip(timestampMillis: Long) {
       tonalElevation = 1.dp,
     ) {
       Text(
-        text = formatDateSeparator(timestampMillis),
+        text = formatDateSeparator(timestampMillis, dateFormat),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
@@ -654,8 +835,10 @@ private fun MessageBubbleItem(
   accentColor: Color,
   replySnippet: String?,
   translatedText: String?,
+  formattedTime: String,
   isSelected: Boolean,
   isPlayingVoice: Boolean,
+  onSwipeReply: () -> Unit,
   onTogglePlayVoice: () -> Unit,
   onTranslate: () -> Unit,
   onClick: () -> Unit,
@@ -666,15 +849,95 @@ private fun MessageBubbleItem(
   val textColor =
     if (isMine) Color.White else MaterialTheme.colorScheme.onSurface
 
-  Row(
+  val density = LocalDensity.current
+  val haptics = LocalHapticFeedback.current
+  val maxSwipePx = remember(density) { with(density) { 74.dp.toPx() } }
+  val triggerPx = remember(density) { with(density) { 50.dp.toPx() } }
+  var rawDragX by remember(msg.id) { mutableFloatStateOf(0f) }
+  var isDragging by remember(msg.id) { mutableStateOf(false) }
+  var thresholdHapticFired by remember(msg.id) { mutableStateOf(false) }
+
+  val animatedDragX by
+    animateFloatAsState(
+      targetValue = rawDragX,
+      animationSpec =
+        if (isDragging) spring(stiffness = Spring.StiffnessHigh)
+        else spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium),
+      label = "swipe_reply_x",
+    )
+
+  val draggableState =
+    rememberDraggableState { delta ->
+      isDragging = true
+      val next = (rawDragX + delta * 0.85f).coerceIn(0f, maxSwipePx)
+      rawDragX = next
+      if (next >= triggerPx && !thresholdHapticFired) {
+        thresholdHapticFired = true
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+      } else if (next < triggerPx) {
+        thresholdHapticFired = false
+      }
+    }
+
+  val replyProgress = (animatedDragX / triggerPx).coerceIn(0f, 1f)
+
+  Box(
     modifier =
       Modifier.fillMaxWidth()
         .background(
           if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
           else Color.Transparent
+        )
+        .draggable(
+          orientation = Orientation.Horizontal,
+          state = draggableState,
+          onDragStopped = {
+            if (rawDragX >= triggerPx) {
+              onSwipeReply()
+            }
+            isDragging = false
+            rawDragX = 0f
+            thresholdHapticFired = false
+          },
         ),
-    horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
   ) {
+    if (replyProgress > 0.04f) {
+      Surface(
+        shape = CircleShape,
+        color =
+          if (replyProgress >= 1f) MaterialTheme.colorScheme.primary
+          else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f),
+        tonalElevation = 2.dp,
+        modifier =
+          Modifier.align(Alignment.CenterStart)
+            .padding(start = 6.dp)
+            .size(34.dp)
+            .graphicsLayer {
+              val s = 0.6f + 0.45f * replyProgress
+              scaleX = s
+              scaleY = s
+              alpha = replyProgress
+            },
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Reply,
+            contentDescription = "Reply",
+            tint =
+              if (replyProgress >= 1f) MaterialTheme.colorScheme.onPrimary
+              else MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+    }
+
+    Row(
+      modifier =
+        Modifier.fillMaxWidth()
+          .offset { IntOffset(animatedDragX.roundToInt(), 0) },
+      horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
+    ) {
     Column(
       horizontalAlignment = if (isMine) Alignment.End else Alignment.Start,
       modifier = Modifier.widthIn(max = 290.dp),
@@ -778,7 +1041,7 @@ private fun MessageBubbleItem(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             Text(
-              text = formatClockTime(msg.createdAtMillis),
+              text = formattedTime,
               style = MaterialTheme.typography.labelSmall,
               color = textColor.copy(alpha = 0.78f),
             )
@@ -830,6 +1093,7 @@ private fun MessageBubbleItem(
           )
         }
       }
+    }
     }
   }
 }
@@ -899,7 +1163,7 @@ private fun isSameDay(aMs: Long, bMs: Long): Boolean {
     ca.get(Calendar.DAY_OF_YEAR) == cb.get(Calendar.DAY_OF_YEAR)
 }
 
-private fun formatDateSeparator(millis: Long): String {
+private fun formatDateSeparator(millis: Long, dateFormat: SimpleDateFormat): String {
   val today = Calendar.getInstance()
   val target = Calendar.getInstance().apply { timeInMillis = millis }
   return when {
@@ -907,10 +1171,6 @@ private fun formatDateSeparator(millis: Long): String {
       today.get(Calendar.DAY_OF_YEAR) == target.get(Calendar.DAY_OF_YEAR) -> "Today"
     today.get(Calendar.YEAR) == target.get(Calendar.YEAR) &&
       today.get(Calendar.DAY_OF_YEAR) - target.get(Calendar.DAY_OF_YEAR) == 1 -> "Yesterday"
-    else -> SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(millis))
+    else -> dateFormat.format(Date(millis))
   }
-}
-
-private fun formatClockTime(millis: Long): String {
-  return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(millis))
 }

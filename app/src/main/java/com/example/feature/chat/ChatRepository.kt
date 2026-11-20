@@ -19,11 +19,13 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.FirebaseFirestoreException
 import java.io.File
+import java.io.IOException
 import java.util.Date
 import java.util.UUID
 import javax.crypto.SecretKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -75,13 +77,26 @@ class ChatRepository(
       firestore
         .collection(FirestorePaths.CHATS)
         .whereArrayContains("participantUids", uid)
-        .orderBy("updatedAt", Query.Direction.DESCENDING)
         .addSnapshotListener { snap, err ->
           if (err != null) {
             handleFirestoreError(err, OperationType.LIST, FirestorePaths.CHATS)
             return@addSnapshotListener
           }
-          val list = snap?.documents?.mapNotNull { it.toObject(ChatThread::class.java) } ?: emptyList()
+          val list =
+            snap
+              ?.documents
+              ?.mapNotNull { doc ->
+                val obj = doc.toObject(ChatThread::class.java) ?: return@mapNotNull null
+                val updated =
+                  doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                val lastMsgAt =
+                  doc.getTimestamp("lastMessageAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                obj.copy(
+                  updatedAt = obj.updatedAt ?: updated,
+                  lastMessageAt = obj.lastMessageAt ?: lastMsgAt,
+                )
+              }
+              ?.sortedByDescending { it.updatedAt?.toDate()?.time ?: 0L } ?: emptyList()
           trySend(list)
         }
     awaitClose { reg.remove() }
@@ -110,8 +125,6 @@ class ChatRepository(
         .document(chatId)
         .collection(FirestorePaths.MESSAGES)
         .whereArrayContains("participantUids", myUid)
-        .orderBy("createdAt", Query.Direction.DESCENDING)
-        .limit(pageLimit)
         .addSnapshotListener { snap, err ->
           if (err != null) {
             handleFirestoreError(
@@ -126,7 +139,8 @@ class ChatRepository(
             snap
               ?.documents
               ?.mapNotNull { doc ->
-                val created = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                val created =
+                  doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                 val obj = doc.toObject(ChatMessage::class.java) ?: return@mapNotNull null
                 if (obj.createdAt == null && created != null) obj.copy(createdAt = created) else obj
               }
@@ -134,7 +148,8 @@ class ChatRepository(
                 myUid !in msg.deleteForMeUids &&
                   (msg.expiresAt == null || msg.expiresAt.toDate().time > nowMs)
               }
-              ?.reversed() ?: emptyList()
+              ?.sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
+              ?.takeLast(pageLimit.toInt().coerceAtLeast(30)) ?: emptyList()
           trySend(list)
         }
     awaitClose { reg.remove() }
@@ -144,30 +159,56 @@ class ChatRepository(
     pendingDao.observeForChat(chatId)
 
   suspend fun fetchPeerDirectoryEntry(friendUid: String, friendMeetUid: String?): UserIdDirectoryEntry? {
-    if (!friendMeetUid.isNullOrBlank()) {
-      val snap = firestore.collection(FirestorePaths.USER_IDS).document(friendMeetUid).get().await()
-      if (snap.exists()) return snap.toObject(UserIdDirectoryEntry::class.java)
+    try {
+      if (!friendMeetUid.isNullOrBlank()) {
+        val snap = firestore.collection(FirestorePaths.USER_IDS).document(friendMeetUid).get().await()
+        if (snap.exists()) return snap.toObject(UserIdDirectoryEntry::class.java)
+      }
+      if (friendUid.isNotBlank()) {
+        val querySnap =
+          firestore
+            .collection(FirestorePaths.USER_IDS)
+            .whereEqualTo("uid", friendUid)
+            .limit(1)
+            .get()
+            .await()
+        return querySnap.documents.firstOrNull()?.toObject(UserIdDirectoryEntry::class.java)
+      }
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.GET, "${FirestorePaths.USER_IDS}/$friendUid")
     }
     return null
   }
 
+  suspend fun resolvePeerDirectoryEntry(ownerUid: String, peerUid: String): UserIdDirectoryEntry? {
+    var knownMeetUid: String? = null
+    try {
+      val connSnap =
+        firestore
+          .collection(FirestorePaths.FRIENDS)
+          .document(FirestorePaths.friendConnectionId(ownerUid, peerUid))
+          .get()
+          .await()
+      knownMeetUid = connSnap.getString("friendMeetUid")
+    } catch (_: Exception) {
+      // Fallback to directory query by uid
+    }
+    return fetchPeerDirectoryEntry(peerUid, knownMeetUid)
+  }
+
   suspend fun resolvePeerKeyByFriendConnection(ownerUid: String, friendUid: String): String? {
-    val connSnap =
-      firestore
-        .collection(FirestorePaths.FRIENDS)
-        .document(FirestorePaths.friendConnectionId(ownerUid, friendUid))
-        .get()
-        .await()
-    val fuid = connSnap.getString("friendMeetUid") ?: return null
-    val entry = fetchPeerDirectoryEntry(friendUid, fuid)
-    return entry?.identityPublicKey
+    return resolvePeerDirectoryEntry(ownerUid, friendUid)?.identityPublicKey
   }
 
   suspend fun deriveKey(myUid: String, peerPublicKeyBase64: String?, chatId: String): SecretKey {
     return e2eeCryptoManager.deriveChatAesKey(myUid, peerPublicKeyBase64, chatId)
   }
 
-  fun decryptMessage(msg: ChatMessage, aesKey: SecretKey): DecryptedChatMessage {
+  fun decryptMessage(
+    msg: ChatMessage,
+    aesKey: SecretKey,
+    fallbackKey: SecretKey? = null,
+  ): DecryptedChatMessage {
     val plainText =
       if (msg.deletedForEveryone) {
         "This message was deleted"
@@ -175,7 +216,15 @@ class ChatRepository(
         try {
           e2eeCryptoManager.decryptMessage(msg.ciphertext, msg.iv, aesKey)
         } catch (_: Exception) {
-          "[Encrypted message]"
+          if (fallbackKey != null) {
+            try {
+              e2eeCryptoManager.decryptMessage(msg.ciphertext, msg.iv, fallbackKey)
+            } catch (_: Exception) {
+              "[Encrypted message]"
+            }
+          } else {
+            "[Encrypted message]"
+          }
         }
       }
     val createdMs = msg.createdAt?.toDate()?.time ?: System.currentTimeMillis()
@@ -202,6 +251,62 @@ class ChatRepository(
       expiresAtMillis = msg.expiresAt?.toDate()?.time,
       canEditWithin15Min = within15Min,
     )
+  }
+
+  suspend fun ensureOldChatThread(
+    myUid: String,
+    peerUid: String,
+    initialLimit: Int = 3,
+  ): String {
+    val chatId = FirestorePaths.canonicalChatId(myUid, peerUid)
+    val chatRef = firestore.collection(FirestorePaths.CHATS).document(chatId)
+    val clampedLimit = initialLimit.coerceIn(1, 100).toLong()
+    try {
+      val snap = chatRef.get().await()
+      if (!snap.exists()) {
+        val participants = listOf(myUid, peerUid).sorted()
+        chatRef
+          .set(
+            mapOf(
+              "participantUids" to participants,
+              "disappearingDurationSeconds" to 0L,
+              "typingUids" to emptyList<String>(),
+              "e2eeSessionVersion" to 1L,
+              "chatMode" to "OLD_CHAT",
+              "oldChatInitiatorUid" to myUid,
+              "oldChatMessageLimit" to clampedLimit,
+              "oldChatSentCount" to 0L,
+              "oldChatUnlocked" to false,
+              "createdAt" to FieldValue.serverTimestamp(),
+              "updatedAt" to FieldValue.serverTimestamp(),
+            )
+          )
+          .await()
+      }
+      return chatId
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.WRITE, "${FirestorePaths.CHATS}/$chatId")
+      throw e
+    }
+  }
+
+  suspend fun updateOldChatLimit(chatId: String, newLimit: Int) {
+    val clamped = newLimit.coerceIn(1, 100).toLong()
+    try {
+      firestore
+        .collection(FirestorePaths.CHATS)
+        .document(chatId)
+        .update(
+          mapOf(
+            "oldChatMessageLimit" to clamped,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          )
+        )
+        .await()
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, "${FirestorePaths.CHATS}/$chatId")
+      throw e
+    }
   }
 
   suspend fun sendMessage(
@@ -257,7 +362,28 @@ class ChatRepository(
         preUploadedMediaUrl = preUploadedMediaUrl,
         disappearingDurationSeconds = disappearingDurationSeconds,
       )
+    } catch (e: CancellationException) {
+      throw e
     } catch (e: Exception) {
+      val rootFirestore =
+        generateSequence<Throwable>(e) { it.cause }
+          .filterIsInstance<FirebaseFirestoreException>()
+          .firstOrNull()
+      val isTransientNetwork =
+        !offlineMonitor.isOnlineNow() ||
+          e is IOException ||
+          rootFirestore?.code == FirebaseFirestoreException.Code.UNAVAILABLE ||
+          rootFirestore?.code == FirebaseFirestoreException.Code.DEADLINE_EXCEEDED
+
+      if (!isTransientNetwork) {
+        handleFirestoreError(
+          e,
+          OperationType.WRITE,
+          "${FirestorePaths.CHATS}/$chatId/${FirestorePaths.MESSAGES}/$localId",
+        )
+        throw e
+      }
+
       Log.w("ChatRepository", "Delivery deferred to offline queue: ${e.message}")
       var savedAudioPath: String? = null
       if (audioBytes != null) {
@@ -307,7 +433,10 @@ class ChatRepository(
     preUploadedMediaUrl: String?,
     disappearingDurationSeconds: Long,
   ) {
-    val aesKey = deriveKey(senderUid, peerPublicKeyBase64, chatId)
+    val resolvedPeerKey =
+      peerPublicKeyBase64?.takeIf { it.isNotBlank() }
+        ?: resolvePeerDirectoryEntry(senderUid, recipientUid)?.identityPublicKey
+    val aesKey = deriveKey(senderUid, resolvedPeerKey, chatId)
     val encrypted = e2eeCryptoManager.encryptMessage(plainText.ifBlank { " " }, aesKey)
 
     val mediaUrl =
@@ -348,7 +477,8 @@ class ChatRepository(
     expiresAt?.let { msgMap["expiresAt"] = it }
 
     val chatRef = firestore.collection(FirestorePaths.CHATS).document(chatId)
-    if (!chatRef.get().await().exists()) {
+    val chatSnap = chatRef.get().await()
+    if (!chatSnap.exists()) {
       chatRef
         .set(
           mapOf(
@@ -363,6 +493,18 @@ class ChatRepository(
         .await()
     }
 
+    val isOldChat = chatSnap.exists() && chatSnap.getString("chatMode") == "OLD_CHAT"
+    val oldChatUnlocked = chatSnap.exists() && chatSnap.getBoolean("oldChatUnlocked") == true
+    val oldChatInitiator = if (chatSnap.exists()) chatSnap.getString("oldChatInitiatorUid") else null
+    val oldChatLimit = if (chatSnap.exists()) (chatSnap.getLong("oldChatMessageLimit") ?: 3L).toInt() else 3
+    val oldChatSent = if (chatSnap.exists()) (chatSnap.getLong("oldChatSentCount") ?: 0L).toInt() else 0
+
+    if (isOldChat && !oldChatUnlocked && senderUid == oldChatInitiator && oldChatSent >= oldChatLimit) {
+      throw IllegalStateException(
+        "Old Chat limit ($oldChatLimit messages) reached. Waiting for reply to unlock unlimited messaging."
+      )
+    }
+
     chatRef.collection(FirestorePaths.MESSAGES).document(messageId).set(msgMap).await()
 
     val previewText =
@@ -373,38 +515,47 @@ class ChatRepository(
         MessageType.STICKER -> "Sticker"
         else -> plainText.take(60)
       }
-    chatRef
-      .update(
-        mapOf(
-          "lastMessageText" to previewText,
-          "lastMessageType" to messageType.name,
-          "lastMessageSenderUid" to senderUid,
-          "lastMessageAt" to FieldValue.serverTimestamp(),
-          "updatedAt" to FieldValue.serverTimestamp(),
-        )
+    val chatUpdates =
+      mutableMapOf<String, Any>(
+        "lastMessageText" to previewText,
+        "lastMessageType" to messageType.name,
+        "lastMessageSenderUid" to senderUid,
+        "lastMessageAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp(),
       )
-      .await()
+    if (isOldChat && !oldChatUnlocked) {
+      if (senderUid == oldChatInitiator) {
+        chatUpdates["oldChatSentCount"] = (oldChatSent + 1).toLong()
+      } else {
+        chatUpdates["oldChatUnlocked"] = true
+      }
+    }
+    chatRef.update(chatUpdates).await()
 
     val notifType = if (messageType == MessageType.REACTION) "REACTION" else "MESSAGE"
     val notifBody =
       if (messageType == MessageType.REACTION) "$senderName reacted $plainText"
       else "$senderName sent an encrypted message"
-    firestore
-      .collection(FirestorePaths.NOTIFICATIONS)
-      .document("notif_${UUID.randomUUID().toString().replace("-", "").take(16)}")
-      .set(
-        mapOf(
-          "recipientUid" to recipientUid,
-          "senderUid" to senderUid,
-          "type" to notifType,
-          "title" to senderName,
-          "body" to notifBody,
-          "targetId" to chatId,
-          "read" to false,
-          "createdAt" to FieldValue.serverTimestamp(),
+    try {
+      firestore
+        .collection(FirestorePaths.NOTIFICATIONS)
+        .document("notif_${UUID.randomUUID().toString().replace("-", "").take(16)}")
+        .set(
+          mapOf(
+            "recipientUid" to recipientUid,
+            "senderUid" to senderUid,
+            "type" to notifType,
+            "title" to senderName.trim().ifBlank { "Friends Meet" }.take(120),
+            "body" to notifBody.take(500),
+            "targetId" to chatId,
+            "read" to false,
+            "createdAt" to FieldValue.serverTimestamp(),
+          )
         )
-      )
-      .await()
+        .await()
+    } catch (_: Exception) {
+      // Non-fatal notification write
+    }
   }
 
   suspend fun flushOfflineQueue() =

@@ -35,6 +35,12 @@ class FriendsMeetFeaturesTest {
     val link = QrPayload.parse(QrPayload.encodeDeviceLinkPayload("tok_abc123", "uid_owner_1"))
     assertEquals(QrPayload.DeviceLinkToken("tok_abc123", "uid_owner_1"), link)
 
+    val groupInvite = QrPayload.parse(QrPayload.encodeGroupPayload("grp_abc123", "CODE99"))
+    assertEquals(QrPayload.GroupInvite("grp_abc123", "CODE99"), groupInvite)
+
+    val rawGroupId = QrPayload.parse("grp_abc123")
+    assertEquals(QrPayload.GroupInvite("grp_abc123", null), rawGroupId)
+
     val bitmap = QrCodeGenerator.generateBitmap("fm-friend://48291037", 128)
     assertEquals(128, bitmap.width)
     assertEquals(128, bitmap.height)

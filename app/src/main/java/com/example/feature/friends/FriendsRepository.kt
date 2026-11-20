@@ -82,64 +82,80 @@ class FriendsRepository(
     addedVia: AddedVia,
   ): String {
     require(ownerUid != peer.uid) { "You cannot add yourself as a friend." }
+    require(peer.uid.isNotBlank()) { "Invalid peer account ID." }
+    require(Regex("^[1-9][0-9]{7}$").matches(peer.friendsMeetUid)) {
+      "Invalid 8-digit Friends Meet UID."
+    }
+    val safeName = peer.displayName.trim().ifBlank { "Friend ${peer.friendsMeetUid}" }.take(80)
     val chatId = FirestorePaths.canonicalChatId(ownerUid, peer.uid)
     val connId = FirestorePaths.friendConnectionId(ownerUid, peer.uid)
 
-    val connRef = firestore.collection(FirestorePaths.FRIENDS).document(connId)
-    val existingConn = connRef.get().await()
-    if (!existingConn.exists()) {
-      val connMap =
-        mutableMapOf<String, Any>(
-          "ownerUid" to ownerUid,
-          "friendUid" to peer.uid,
-          "friendMeetUid" to peer.friendsMeetUid,
-          "friendName" to peer.displayName,
-          "friendOnline" to peer.online,
-          "blocked" to false,
-          "addedVia" to addedVia.name,
-          "chatId" to chatId,
-          "createdAt" to FieldValue.serverTimestamp(),
-          "updatedAt" to FieldValue.serverTimestamp(),
-        )
-      if (!peer.photoUrl.isNullOrBlank()) {
-        connMap["friendPhotoUrl"] = peer.photoUrl
+    try {
+      val connRef = firestore.collection(FirestorePaths.FRIENDS).document(connId)
+      val existingConn = connRef.get().await()
+      if (!existingConn.exists()) {
+        val connMap =
+          mutableMapOf<String, Any>(
+            "ownerUid" to ownerUid,
+            "friendUid" to peer.uid,
+            "friendMeetUid" to peer.friendsMeetUid,
+            "friendName" to safeName,
+            "friendOnline" to peer.online,
+            "blocked" to false,
+            "addedVia" to addedVia.name,
+            "chatId" to chatId,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          )
+        if (!peer.photoUrl.isNullOrBlank()) {
+          connMap["friendPhotoUrl"] = peer.photoUrl.take(512)
+        }
+        connRef.set(connMap).await()
+      } else {
+        val updates =
+          mutableMapOf<String, Any>(
+            "friendName" to safeName,
+            "friendOnline" to peer.online,
+            "blocked" to false,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          )
+        if (!peer.photoUrl.isNullOrBlank()) updates["friendPhotoUrl"] = peer.photoUrl.take(512)
+        connRef.update(updates).await()
       }
-      connRef.set(connMap).await()
-    } else {
-      val updates =
-        mutableMapOf<String, Any>(
-          "friendName" to peer.displayName,
-          "friendOnline" to peer.online,
-          "updatedAt" to FieldValue.serverTimestamp(),
-        )
-      if (!peer.photoUrl.isNullOrBlank()) updates["friendPhotoUrl"] = peer.photoUrl
-      connRef.update(updates).await()
-    }
 
-    ensureChatThreadExists(ownerUid, peer.uid)
-    return chatId
+      ensureChatThreadExists(ownerUid, peer.uid)
+      return chatId
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.WRITE, "${FirestorePaths.FRIENDS}/$connId")
+      throw e
+    }
   }
 
   suspend fun ensureChatThreadExists(uidA: String, uidB: String): String {
     val chatId = FirestorePaths.canonicalChatId(uidA, uidB)
     val chatRef = firestore.collection(FirestorePaths.CHATS).document(chatId)
-    val chatSnap = chatRef.get().await()
-    if (!chatSnap.exists()) {
-      val participants = listOf(uidA, uidB).sorted()
-      chatRef
-        .set(
-          mapOf(
-            "participantUids" to participants,
-            "disappearingDurationSeconds" to 0L,
-            "typingUids" to emptyList<String>(),
-            "e2eeSessionVersion" to 1L,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp(),
+    try {
+      val chatSnap = chatRef.get().await()
+      if (!chatSnap.exists()) {
+        val participants = listOf(uidA, uidB).sorted()
+        chatRef
+          .set(
+            mapOf(
+              "participantUids" to participants,
+              "disappearingDurationSeconds" to 0L,
+              "typingUids" to emptyList<String>(),
+              "e2eeSessionVersion" to 1L,
+              "createdAt" to FieldValue.serverTimestamp(),
+              "updatedAt" to FieldValue.serverTimestamp(),
+            )
           )
-        )
-        .await()
+          .await()
+      }
+      return chatId
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.WRITE, "${FirestorePaths.CHATS}/$chatId")
+      throw e
     }
-    return chatId
   }
 
   /**

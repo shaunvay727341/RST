@@ -34,6 +34,8 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +49,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,16 +64,20 @@ import com.example.core.model.FriendTag
 import com.example.core.model.UserIdDirectoryEntry
 import com.example.core.qr.QrCodeGenerator
 import com.example.core.qr.QrPayload
+import com.example.ui.components.GlassCard
 import com.example.ui.components.UserAvatar
 import com.example.ui.theme.FriendsMeetTagPalette
 import com.example.ui.theme.OfflineGray
 import com.example.ui.theme.OnlineGreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ProfilePreviewDialog(
   peer: UserIdDirectoryEntry,
   isAlreadyFriend: Boolean,
   isBusy: Boolean,
+  error: String? = null,
   onAddFriendAndChat: () -> Unit,
   onViewProfile: () -> Unit,
   onDismiss: () -> Unit,
@@ -115,6 +122,20 @@ fun ProfilePreviewDialog(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
+        if (!error.isNullOrBlank()) {
+          Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Text(
+              text = error,
+              color = MaterialTheme.colorScheme.onErrorContainer,
+              style = MaterialTheme.typography.bodySmall,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            )
+          }
+        }
       }
     },
     confirmButton = {
@@ -123,15 +144,26 @@ fun ProfilePreviewDialog(
         enabled = !isBusy,
         modifier = Modifier.minimumInteractiveComponentSize().testTag("preview_add_friend_button"),
       ) {
-        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(if (isAlreadyFriend) "Open Chat" else "Add Friend")
+        if (isBusy) {
+          CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onPrimary,
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Connecting…")
+        } else {
+          Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(if (isAlreadyFriend) "Open Chat" else "Add Friend")
+        }
       }
     },
     dismissButton = {
       Row {
         OutlinedButton(
           onClick = onViewProfile,
+          enabled = !isBusy,
           modifier =
             Modifier.minimumInteractiveComponentSize().testTag("preview_view_profile_button"),
         ) {
@@ -140,7 +172,7 @@ fun ProfilePreviewDialog(
           Text("View Profile")
         }
         Spacer(modifier = Modifier.width(6.dp))
-        TextButton(onClick = onDismiss) { Text("Close") }
+        TextButton(onClick = onDismiss, enabled = !isBusy) { Text("Close") }
       }
     },
   )
@@ -157,8 +189,10 @@ fun AddFriendByUidDialog(
   onDismiss: () -> Unit,
 ) {
   var uidInput by remember { mutableStateOf("") }
-  val qrBitmap: Bitmap = remember(myFriendsMeetUid) {
-    QrCodeGenerator.generateBitmap(QrPayload.encodeFriendPayload(myFriendsMeetUid), 360)
+  val qrBitmap by produceState<Bitmap?>(initialValue = null, myFriendsMeetUid) {
+    value = withContext(Dispatchers.Default) {
+      QrCodeGenerator.generateBitmap(QrPayload.encodeFriendPayload(myFriendsMeetUid), 360)
+    }
   }
 
   AlertDialog(
@@ -179,19 +213,25 @@ fun AddFriendByUidDialog(
           modifier = Modifier.fillMaxWidth().testTag("uid_lookup_input"),
         )
         if (!error.isNullOrBlank()) {
-          Text(
-            text = error,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-          )
+          Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Text(
+              text = error,
+              color = MaterialTheme.colorScheme.onErrorContainer,
+              style = MaterialTheme.typography.bodySmall,
+              modifier = Modifier.padding(10.dp),
+            )
+          }
         }
-        Surface(
-          shape = RoundedCornerShape(16.dp),
-          tonalElevation = 2.dp,
+        GlassCard(
+          cornerRadius = 16.dp,
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
           ) {
             Text(
@@ -200,11 +240,18 @@ fun AddFriendByUidDialog(
               fontWeight = FontWeight.SemiBold,
             )
             Spacer(modifier = Modifier.height(6.dp))
-            Image(
-              bitmap = qrBitmap.asImageBitmap(),
-              contentDescription = "My Friends Meet QR Code",
-              modifier = Modifier.size(140.dp).clip(RoundedCornerShape(12.dp)),
-            )
+            val bmp = qrBitmap
+            if (bmp != null) {
+              Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "My Friends Meet QR Code",
+                modifier = Modifier.size(140.dp).clip(RoundedCornerShape(12.dp)),
+              )
+            } else {
+              Box(modifier = Modifier.size(140.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+              }
+            }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
               text = "UID: $myFriendsMeetUid",

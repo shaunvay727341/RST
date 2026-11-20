@@ -8,14 +8,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,8 +38,7 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -51,10 +53,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -73,8 +77,12 @@ import com.example.core.notifications.OneSignalStatus
 import com.example.core.qr.QrCodeGenerator
 import com.example.core.qr.QrPayload
 import com.example.feature.friends.QuickMessagesPickerDialog
+import com.example.ui.components.FriendsMeetBackdrop
+import com.example.ui.components.GlassCard
 import com.example.ui.components.UserAvatar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,9 +106,16 @@ fun SettingsScreen(
   var showQuickMsgManager by remember { mutableStateOf(false) }
 
   if (showQrDialog) {
-    val bitmap: Bitmap = remember(profile.friendsMeetUid) {
-      QrCodeGenerator.generateBitmap(QrPayload.encodeFriendPayload(profile.friendsMeetUid), 420)
-    }
+    val bitmap by
+      produceState<Bitmap?>(initialValue = null, key1 = profile.friendsMeetUid) {
+        value =
+          withContext(Dispatchers.Default) {
+            QrCodeGenerator.generateBitmap(
+              QrPayload.encodeFriendPayload(profile.friendsMeetUid),
+              420,
+            )
+          }
+      }
     AlertDialog(
       onDismissRequest = { showQrDialog = false },
       title = { Text("My Friends Meet QR") },
@@ -110,11 +125,18 @@ fun SettingsScreen(
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = "My Friends Meet QR Code",
-            modifier = Modifier.size(200.dp).clip(RoundedCornerShape(14.dp)),
-          )
+          val bmp = bitmap
+          if (bmp != null) {
+            Image(
+              bitmap = bmp.asImageBitmap(),
+              contentDescription = "My Friends Meet QR Code",
+              modifier = Modifier.size(200.dp).clip(RoundedCornerShape(14.dp)),
+            )
+          } else {
+            Box(modifier = Modifier.size(200.dp), contentAlignment = Alignment.Center) {
+              CircularProgressIndicator()
+            }
+          }
           Text(
             text = "UID: ${profile.friendsMeetUid}",
             style = MaterialTheme.typography.titleLarge,
@@ -208,6 +230,7 @@ fun SettingsScreen(
   }
 
   Scaffold(
+    contentWindowInsets = WindowInsets.safeDrawing,
     snackbarHost = { SnackbarHost(snackbarHostState) },
     topBar = {
       TopAppBar(
@@ -220,24 +243,29 @@ fun SettingsScreen(
             Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Sign out")
           }
         },
+        colors =
+          TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+          ),
       )
     },
   ) { innerPadding ->
-    LazyColumn(
-      modifier = Modifier.fillMaxSize().padding(innerPadding),
-      contentPadding = PaddingValues(16.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-      item {
-        Card(
-          colors =
-            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    FriendsMeetBackdrop(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        item {
+          GlassCard(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 22.dp,
           ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
             UserAvatar(
               name = profile.fullName,
               photoUrl = profile.photoUrl,
@@ -319,7 +347,7 @@ fun SettingsScreen(
       }
 
       item {
-        Card(modifier = Modifier.fillMaxWidth()) {
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 18.dp) {
           Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -345,7 +373,7 @@ fun SettingsScreen(
       }
 
       item {
-        Card(modifier = Modifier.fillMaxWidth()) {
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 18.dp) {
           Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(
@@ -371,7 +399,7 @@ fun SettingsScreen(
       }
 
       item {
-        Card(modifier = Modifier.fillMaxWidth()) {
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 18.dp) {
           Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -391,6 +419,7 @@ fun SettingsScreen(
           }
         }
       }
+      }
     }
   }
 }
@@ -403,9 +432,8 @@ private fun SettingsRowCard(
   onClick: () -> Unit,
   testTag: String,
 ) {
-  Card(
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+  GlassCard(
+    cornerRadius = 18.dp,
     modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).testTag(testTag),
   ) {
     Row(

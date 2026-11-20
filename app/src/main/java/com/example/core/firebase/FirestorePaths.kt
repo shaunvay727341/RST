@@ -20,6 +20,8 @@ object FirestorePaths {
   const val BACKUP_METADATA = "backupMetadata"
   const val USER_SETTINGS = "userSettings"
   const val DEVICE_LINK_TOKENS = "deviceLinkTokens"
+  const val GROUPS = "groups"
+  const val GROUP_MESSAGES = "groupMessages"
 
   fun canonicalChatId(uidA: String, uidB: String): String {
     return if (uidA <= uidB) "${uidA}_${uidB}" else "${uidB}_${uidA}"

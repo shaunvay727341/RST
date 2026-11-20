@@ -110,16 +110,22 @@ test("users & userIds: PII isolation, valid registration, ghost field rejection,
     })
   );
 
-  // Bob can look up Alice's 8-digit UID directly via get, but cannot list/scrape userIds
+  // Bob can look up Alice's 8-digit UID via get OR list the zero-PII directory for Old Chat
   await assertSucceeds(bobDb.collection("userIds").doc(ALICE_FUID).get());
-  await assertFails(bobDb.collection("userIds").get());
+  await assertSucceeds(bobDb.collection("userIds").get());
+  await assertFails(testEnv.unauthenticatedContext().firestore().collection("userIds").get());
 });
 
-test("friends & friendTags: owner isolation and filtered list queries", async () => {
+test("friends & friendTags: owner isolation, non-existent doc pre-check, and filtered list queries", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   const now = pastDate(5000);
   const connId = `${ALICE_UID}_${BOB_UID}`;
+
+  // Pre-creation get() on non-existent docs must succeed (not crash on resource == null)
+  await assertSucceeds(aliceDb.collection("friends").doc(connId).get());
+  await assertSucceeds(aliceDb.collection("chats").doc(CHAT_AB).get());
+  await assertSucceeds(aliceDb.collection("friendTags").doc(connId).get());
 
   await assertSucceeds(
     aliceDb.collection("friends").doc(connId).set({
@@ -457,6 +463,205 @@ test("deviceLinkTokens & message 15-min edit window: single-use redemption and t
       edited: true,
       editedAt: pastDate(500),
       updatedAt: pastDate(500),
+    })
+  );
+});
+
+test("oldChat: enforces initiator message limit until recipient sets limit or replies to unlock", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const now = pastDate(5000);
+
+  await assertSucceeds(
+    aliceDb.collection("chats").doc(CHAT_AB).set({
+      participantUids: [ALICE_UID, BOB_UID],
+      disappearingDurationSeconds: 0,
+      typingUids: [],
+      e2eeSessionVersion: 1,
+      chatMode: "OLD_CHAT",
+      oldChatInitiatorUid: ALICE_UID,
+      oldChatMessageLimit: 2,
+      oldChatSentCount: 0,
+      oldChatUnlocked: false,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Alice cannot self-unlock her own Old Chat
+  await assertFails(
+    aliceDb.collection("chats").doc(CHAT_AB).update({
+      oldChatUnlocked: true,
+      updatedAt: pastDate(1000),
+    })
+  );
+
+  // Alice sends 2 messages up to limit
+  for (let i = 1; i <= 2; i++) {
+    await assertSucceeds(
+      aliceDb.collection("chats").doc(CHAT_AB).collection("messages").doc(`om_${i}`).set({
+        chatId: CHAT_AB,
+        senderUid: ALICE_UID,
+        recipientUid: BOB_UID,
+        participantUids: [ALICE_UID, BOB_UID],
+        messageType: "TEXT",
+        ciphertext: "Y2lwaGVy",
+        iv: "MTIzNDU2Nzg5MDEy",
+        readByUids: [ALICE_UID],
+        deleteForMeUids: [],
+        deletedForEveryone: false,
+        edited: false,
+        createdAt: pastDate(2000 - i * 100),
+        updatedAt: pastDate(2000 - i * 100),
+      })
+    );
+    await assertSucceeds(
+      aliceDb.collection("chats").doc(CHAT_AB).update({
+        oldChatSentCount: i,
+        updatedAt: pastDate(2000 - i * 100),
+      })
+    );
+  }
+
+  // 3rd message from Alice must fail while locked at limit 2
+  await assertFails(
+    aliceDb.collection("chats").doc(CHAT_AB).collection("messages").doc("om_3").set({
+      chatId: CHAT_AB,
+      senderUid: ALICE_UID,
+      recipientUid: BOB_UID,
+      participantUids: [ALICE_UID, BOB_UID],
+      messageType: "TEXT",
+      ciphertext: "Y2lwaGVy",
+      iv: "MTIzNDU2Nzg5MDEy",
+      readByUids: [ALICE_UID],
+      deleteForMeUids: [],
+      deletedForEveryone: false,
+      edited: false,
+      createdAt: pastDate(500),
+      updatedAt: pastDate(500),
+    })
+  );
+
+  // Bob can adjust limit before replying, or reply & unlock unlimited
+  await assertSucceeds(
+    bobDb.collection("chats").doc(CHAT_AB).collection("messages").doc("om_reply").set({
+      chatId: CHAT_AB,
+      senderUid: BOB_UID,
+      recipientUid: ALICE_UID,
+      participantUids: [ALICE_UID, BOB_UID],
+      messageType: "TEXT",
+      ciphertext: "cmVwbHk=",
+      iv: "MTIzNDU2Nzg5MDEy",
+      readByUids: [BOB_UID],
+      deleteForMeUids: [],
+      deletedForEveryone: false,
+      edited: false,
+      createdAt: pastDate(400),
+      updatedAt: pastDate(400),
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("chats").doc(CHAT_AB).update({
+      oldChatUnlocked: true,
+      updatedAt: pastDate(400),
+    })
+  );
+
+  // Once unlocked, Alice can send unlimited messages
+  await assertSucceeds(
+    aliceDb.collection("chats").doc(CHAT_AB).collection("messages").doc("om_3").set({
+      chatId: CHAT_AB,
+      senderUid: ALICE_UID,
+      recipientUid: BOB_UID,
+      participantUids: [ALICE_UID, BOB_UID],
+      messageType: "TEXT",
+      ciphertext: "Y2lwaGVy",
+      iv: "MTIzNDU2Nzg5MDEy",
+      readByUids: [ALICE_UID],
+      deleteForMeUids: [],
+      deletedForEveryone: false,
+      edited: false,
+      createdAt: pastDate(200),
+      updatedAt: pastDate(200),
+    })
+  );
+});
+
+test("groups & groupMessages: participant membership isolation and QR join", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  const now = pastDate(5000);
+
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("grp_1").set({
+      name: "Study Squad",
+      description: "Final prep",
+      creatorUid: ALICE_UID,
+      adminUids: [ALICE_UID],
+      participantUids: [ALICE_UID, BOB_UID],
+      inviteCode: "SQUAD99",
+      allowQrJoin: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    bobDb.collection("groups").doc("grp_1").collection("groupMessages").doc("gm_1").set({
+      groupId: "grp_1",
+      senderUid: BOB_UID,
+      senderName: "Bob",
+      text: "Hello group!",
+      createdAt: pastDate(1000),
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("grp_1").collection("groupMessages").get()
+  );
+  await assertFails(
+    charlieDb.collection("groups").doc("grp_1").collection("groupMessages").get()
+  );
+
+  // Charlie cannot alter admins or remove existing members while joining
+  await assertFails(
+    charlieDb.collection("groups").doc("grp_1").update({
+      participantUids: [ALICE_UID, CHARLIE_UID],
+      updatedAt: pastDate(900),
+    })
+  );
+  await assertFails(
+    charlieDb.collection("groups").doc("grp_1").update({
+      adminUids: [ALICE_UID, CHARLIE_UID],
+      participantUids: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      updatedAt: pastDate(900),
+    })
+  );
+
+  // Charlie joins cleanly via Group QR scan (adds only himself)
+  await assertSucceeds(
+    charlieDb.collection("groups").doc("grp_1").update({
+      participantUids: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      updatedAt: pastDate(800),
+    })
+  );
+
+  // Once joined, Charlie can read messages and send a reply/forwarded message
+  await assertSucceeds(
+    charlieDb.collection("groups").doc("grp_1").collection("groupMessages").get()
+  );
+  await assertSucceeds(
+    charlieDb.collection("groups").doc("grp_1").collection("groupMessages").doc("gm_2").set({
+      groupId: "grp_1",
+      senderUid: CHARLIE_UID,
+      senderName: "Charlie",
+      text: "Glad to join!",
+      replyToMessageId: "gm_1",
+      replyToSenderName: "Bob",
+      replyToText: "Hello group!",
+      forwardedCount: 0,
+      createdAt: pastDate(700),
     })
   );
 });

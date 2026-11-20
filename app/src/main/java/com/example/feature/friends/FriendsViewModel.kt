@@ -75,10 +75,23 @@ class FriendsViewModel(
     _uiState.update { it.copy(statusMessage = null) }
   }
 
+  fun clearLookupError() {
+    _uiState.update { it.copy(lookupError = null) }
+  }
+
+  fun reportStatusError(message: String) {
+    _uiState.update { it.copy(statusMessage = message) }
+  }
+
   fun lookupByUidOrQr(rawUid: String, via: AddedVia) {
     val cleaned = rawUid.trim()
     if (cleaned == myFriendsMeetUid) {
-      _uiState.update { it.copy(lookupError = "That is your own Friends Meet UID.") }
+      _uiState.update {
+        it.copy(
+          lookupError = "That is your own Friends Meet UID.",
+          statusMessage = "You cannot add your own UID.",
+        )
+      }
       return
     }
     _uiState.update {
@@ -87,20 +100,22 @@ class FriendsViewModel(
     viewModelScope.launch {
       val found = friendsRepository.lookupByFriendsMeetUid(cleaned)
       if (found == null) {
+        val msg = "No Friends Meet user found for UID $cleaned."
         _uiState.update {
           it.copy(
             isSearchingUid = false,
-            lookupError = "No Friends Meet user found for UID $cleaned.",
+            lookupError = msg,
+            statusMessage = if (via == AddedVia.QR_CODE) msg else null,
           )
         }
       } else {
-        _uiState.update { it.copy(isSearchingUid = false, lookupResult = found) }
+        _uiState.update { it.copy(isSearchingUid = false, lookupResult = found, lookupError = null) }
       }
     }
   }
 
   fun dismissLookupPreview() {
-    _uiState.update { it.copy(lookupResult = null, lookupError = null) }
+    _uiState.update { it.copy(lookupResult = null, lookupError = null, isProcessingAction = false) }
   }
 
   fun addFriendAndOpenChat(
@@ -108,7 +123,7 @@ class FriendsViewModel(
     via: AddedVia,
     onChatReady: (chatId: String, friendUid: String) -> Unit,
   ) {
-    _uiState.update { it.copy(isProcessingAction = true) }
+    _uiState.update { it.copy(isProcessingAction = true, lookupError = null) }
     viewModelScope.launch {
       try {
         val chatId = friendsRepository.addFriendAndOpenChat(myUid, peer, via)
@@ -116,15 +131,18 @@ class FriendsViewModel(
           it.copy(
             isProcessingAction = false,
             lookupResult = null,
+            lookupError = null,
             statusMessage = "Connected with ${peer.displayName}",
           )
         }
         onChatReady(chatId, peer.uid)
       } catch (e: Exception) {
+        val errMsg = e.localizedMessage ?: "Unable to add friend right now."
         _uiState.update {
           it.copy(
             isProcessingAction = false,
-            lookupError = e.localizedMessage ?: "Unable to add friend",
+            lookupError = errMsg,
+            statusMessage = errMsg,
           )
         }
       }
@@ -166,7 +184,7 @@ class FriendsViewModel(
         )
         _uiState.update { it.copy(statusMessage = "Quick message sent to ${friend.friendName}") }
       } catch (e: Exception) {
-        _uiState.update { it.copy(statusMessage = "Queued / failed: ${e.message}") }
+        _uiState.update { it.copy(statusMessage = "Failed: ${e.localizedMessage ?: "Retry later"}") }
       }
     }
   }
@@ -204,37 +222,59 @@ class FriendsViewModel(
     existingCategories: List<String>,
   ) {
     viewModelScope.launch {
-      friendsRepository.setFriendTag(myUid, friendUid, category, label, colorHex)
-      val defaults = setOf("Relationship", "Location", "Office", "Work")
-      if (category !in defaults && category !in existingCategories) {
-        friendsRepository.saveCustomTagCategories(myUid, existingCategories + category)
+      try {
+        friendsRepository.setFriendTag(myUid, friendUid, category, label, colorHex)
+        val defaults = setOf("Relationship", "Location", "Office", "Work")
+        if (category !in defaults && category !in existingCategories) {
+          friendsRepository.saveCustomTagCategories(myUid, existingCategories + category)
+        }
+        _uiState.update { it.copy(statusMessage = "Tag updated") }
+      } catch (e: Exception) {
+        _uiState.update { it.copy(statusMessage = e.localizedMessage ?: "Failed to save tag") }
       }
-      _uiState.update { it.copy(statusMessage = "Tag updated") }
     }
   }
 
   fun clearFriendTag(friendUid: String) {
     viewModelScope.launch {
-      friendsRepository.removeFriendTag(myUid, friendUid)
-      _uiState.update { it.copy(statusMessage = "Tag cleared") }
+      try {
+        friendsRepository.removeFriendTag(myUid, friendUid)
+        _uiState.update { it.copy(statusMessage = "Tag cleared") }
+      } catch (e: Exception) {
+        _uiState.update { it.copy(statusMessage = e.localizedMessage ?: "Failed to remove tag") }
+      }
     }
   }
 
   fun blockFriend(friendUid: String) {
     viewModelScope.launch {
-      friendsRepository.setBlocked(myUid, friendUid, true)
-      _uiState.update { it.copy(statusMessage = "Friend blocked") }
+      try {
+        friendsRepository.setBlocked(myUid, friendUid, true)
+        _uiState.update { it.copy(statusMessage = "Friend blocked") }
+      } catch (e: Exception) {
+        _uiState.update { it.copy(statusMessage = e.localizedMessage ?: "Failed to block friend") }
+      }
     }
   }
 
   fun removeFriend(friendUid: String) {
     viewModelScope.launch {
-      friendsRepository.removeFriend(myUid, friendUid)
-      _uiState.update { it.copy(statusMessage = "Friend removed") }
+      try {
+        friendsRepository.removeFriend(myUid, friendUid)
+        _uiState.update { it.copy(statusMessage = "Friend removed") }
+      } catch (e: Exception) {
+        _uiState.update { it.copy(statusMessage = e.localizedMessage ?: "Failed to remove friend") }
+      }
     }
   }
 
   fun updateQuickMessages(list: List<String>) {
-    viewModelScope.launch { friendsRepository.saveQuickMessages(myUid, list) }
+    viewModelScope.launch {
+      try {
+        friendsRepository.saveQuickMessages(myUid, list)
+      } catch (e: Exception) {
+        _uiState.update { it.copy(statusMessage = e.localizedMessage ?: "Failed to update quick messages") }
+      }
+    }
   }
 }

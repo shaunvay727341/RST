@@ -109,6 +109,11 @@ service cloud.firestore {
              isOptionalString(data, 'themeId', 64) &&
              data.typingUids is list && data.typingUids.size() <= 2 &&
              data.e2eeSessionVersion is int && data.e2eeSessionVersion >= 1 &&
+             (!('chatMode' in data) || data.chatMode in ['FRIEND', 'OLD_CHAT']) &&
+             (!('oldChatInitiatorUid' in data) || (data.oldChatInitiatorUid is string && data.oldChatInitiatorUid in data.participantUids)) &&
+             (!('oldChatMessageLimit' in data) || (data.oldChatMessageLimit is int && data.oldChatMessageLimit >= 1 && data.oldChatMessageLimit <= 100)) &&
+             (!('oldChatSentCount' in data) || (data.oldChatSentCount is int && data.oldChatSentCount >= 0 && data.oldChatSentCount <= 100)) &&
+             (!('oldChatUnlocked' in data) || data.oldChatUnlocked is bool) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -267,6 +272,36 @@ service cloud.firestore {
              isValidTimestamp(data.updatedAt);
     }
 
+    function isValidGroupThread(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             isOptionalString(data, 'description', 300) &&
+             data.creatorUid is string && isValidId(data.creatorUid) &&
+             data.adminUids is list && data.adminUids.size() >= 1 && data.adminUids.size() <= 50 &&
+             data.participantUids is list && data.participantUids.size() >= 1 && data.participantUids.size() <= 100 &&
+             isOptionalString(data, 'photoUrl', 512) &&
+             isOptionalString(data, 'inviteCode', 32) &&
+             (!('allowQrJoin' in data) || data.allowQrJoin is bool) &&
+             isOptionalString(data, 'lastMessageText', 512) &&
+             isOptionalString(data, 'lastMessageSenderUid', 128) &&
+             (!('lastMessageAt' in data) || isValidTimestamp(data.lastMessageAt)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidGroupMessage(data, groupId) {
+      return data.groupId is string && data.groupId == groupId &&
+             data.senderUid is string && isValidId(data.senderUid) &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 4000 &&
+             isOptionalString(data, 'mediaUrl', 1024) &&
+             isOptionalString(data, 'replyToMessageId', 128) &&
+             isOptionalString(data, 'replyToSenderName', 80) &&
+             isOptionalString(data, 'replyToText', 300) &&
+             (!('forwardedCount' in data) || (data.forwardedCount is int && data.forwardedCount >= 0 && data.forwardedCount <= 10)) &&
+             (!('participantUids' in data) || (data.participantUids is list && data.participantUids.size() >= 1 && data.participantUids.size() <= 100)) &&
+             isValidTimestamp(data.createdAt);
+    }
+
     // --- Collection Rules ---
 
     // 1. users/{uid} (Owner-only PII isolation)
@@ -308,10 +343,10 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 2. userIds/{friendsMeetUid} (Atomic unique 8-digit UID registry, zero PII)
+    // 2. userIds/{friendsMeetUid} (Atomic unique 8-digit UID registry & Old Chat directory, zero PII)
     match /userIds/{friendsMeetUid} {
       allow get: if isSignedIn() && isValidFriendsMeetUid(friendsMeetUid);
-      allow list: if false;
+      allow list: if isSignedIn();
 
       allow create: if isSignedIn() &&
                        isValidFriendsMeetUid(friendsMeetUid) &&
@@ -336,7 +371,8 @@ service cloud.firestore {
 
     // 3. friends/{connectionId}
     match /friends/{connectionId} {
-      allow get: if isSignedIn() && isValidId(connectionId) && existing().ownerUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(connectionId) &&
+                    (resource == null || existing().ownerUid == request.auth.uid);
       allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
 
       allow create: if isSignedIn() &&
@@ -370,13 +406,16 @@ service cloud.firestore {
 
     // 4. chats/{chatId}
     match /chats/{chatId} {
-      allow get: if isSignedIn() && isValidId(chatId) && request.auth.uid in existing().participantUids;
+      allow get: if isSignedIn() && isValidId(chatId) &&
+                    (resource == null || request.auth.uid in existing().participantUids);
       allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
 
       allow create: if isSignedIn() &&
                        isValidId(chatId) &&
                        request.auth.uid in incoming().participantUids &&
                        isValidChatThread(incoming()) &&
+                       (!('oldChatUnlocked' in incoming()) || incoming().oldChatUnlocked == false) &&
+                       (!('oldChatSentCount' in incoming()) || incoming().oldChatSentCount == 0) &&
                        incoming().keys().hasAll([
                          'participantUids', 'disappearingDurationSeconds', 'typingUids',
                          'e2eeSessionVersion', 'createdAt', 'updatedAt'
@@ -385,6 +424,8 @@ service cloud.firestore {
                          'participantUids', 'lastMessageText', 'lastMessageType',
                          'lastMessageSenderUid', 'lastMessageAt', 'disappearingDurationSeconds',
                          'wallpaperId', 'themeId', 'typingUids', 'e2eeSessionVersion',
+                         'chatMode', 'oldChatInitiatorUid', 'oldChatMessageLimit',
+                         'oldChatSentCount', 'oldChatUnlocked',
                          'createdAt', 'updatedAt'
                        ]);
 
@@ -394,10 +435,28 @@ service cloud.firestore {
                        incoming().participantUids == existing().participantUids &&
                        incoming().createdAt == existing().createdAt &&
                        isValidChatThread(incoming()) &&
+                       (
+                         !('chatMode' in existing()) ||
+                         existing().chatMode != 'OLD_CHAT' ||
+                         (
+                           // In Old Chat: initiator cannot unlock or raise limit; count cannot exceed limit while locked
+                           (!('oldChatUnlocked' in incoming().diff(existing()).affectedKeys()) || existing().oldChatInitiatorUid != request.auth.uid) &&
+                           (!('oldChatMessageLimit' in incoming().diff(existing()).affectedKeys()) || existing().oldChatInitiatorUid != request.auth.uid) &&
+                           (
+                             ('oldChatUnlocked' in incoming() && incoming().oldChatUnlocked == true) ||
+                             !('oldChatSentCount' in incoming().diff(existing()).affectedKeys()) ||
+                             (
+                               incoming().oldChatSentCount <=
+                                 (('oldChatMessageLimit' in incoming()) ? incoming().oldChatMessageLimit : 3)
+                             )
+                           )
+                         )
+                       ) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'lastMessageText', 'lastMessageType', 'lastMessageSenderUid', 'lastMessageAt',
                          'disappearingDurationSeconds', 'wallpaperId', 'themeId', 'typingUids',
-                         'e2eeSessionVersion', 'updatedAt'
+                         'e2eeSessionVersion', 'chatMode', 'oldChatInitiatorUid',
+                         'oldChatMessageLimit', 'oldChatSentCount', 'oldChatUnlocked', 'updatedAt'
                        ]);
 
       allow delete: if false;
@@ -405,7 +464,7 @@ service cloud.firestore {
       // 5. chats/{chatId}/messages/{messageId}
       match /messages/{messageId} {
         allow get: if isSignedIn() && isValidId(chatId) && isValidId(messageId) &&
-                      request.auth.uid in existing().participantUids;
+                      (resource == null || request.auth.uid in existing().participantUids);
         allow list: if isSignedIn() && isValidId(chatId) &&
                        request.auth.uid in existing().participantUids;
 
@@ -414,6 +473,14 @@ service cloud.firestore {
                          isValidId(messageId) &&
                          incoming().senderUid == request.auth.uid &&
                          isValidChatMessage(incoming(), chatId) &&
+                         (
+                           !exists(/databases/$(database)/documents/chats/$(chatId)) ||
+                           !(get(/databases/$(database)/documents/chats/$(chatId)).data.get('chatMode', 'FRIEND') == 'OLD_CHAT') ||
+                           get(/databases/$(database)/documents/chats/$(chatId)).data.get('oldChatUnlocked', false) == true ||
+                           get(/databases/$(database)/documents/chats/$(chatId)).data.get('oldChatInitiatorUid', '') != request.auth.uid ||
+                           get(/databases/$(database)/documents/chats/$(chatId)).data.get('oldChatSentCount', 0) <
+                             get(/databases/$(database)/documents/chats/$(chatId)).data.get('oldChatMessageLimit', 3)
+                         ) &&
                          incoming().keys().hasAll([
                            'chatId', 'senderUid', 'recipientUid', 'participantUids',
                            'messageType', 'ciphertext', 'iv', 'readByUids',
@@ -457,7 +524,8 @@ service cloud.firestore {
 
     // 6. calls/{callId}
     match /calls/{callId} {
-      allow get: if isSignedIn() && isValidId(callId) && request.auth.uid in existing().participantUids;
+      allow get: if isSignedIn() && isValidId(callId) &&
+                    (resource == null || request.auth.uid in existing().participantUids);
       allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
 
       allow create: if isSignedIn() &&
@@ -494,7 +562,7 @@ service cloud.firestore {
 
       match /iceCandidates/{candidateId} {
         allow get: if isSignedIn() && isValidId(callId) && isValidId(candidateId) &&
-                      request.auth.uid in existing().participantUids;
+                      (resource == null || request.auth.uid in existing().participantUids);
         allow list: if isSignedIn() && isValidId(callId) &&
                        request.auth.uid in existing().participantUids;
         allow create: if isSignedIn() && isValidId(callId) && isValidId(candidateId) &&
@@ -506,7 +574,8 @@ service cloud.firestore {
 
     // 7. friendTags/{tagId} (Private single active tag per friend)
     match /friendTags/{tagId} {
-      allow get: if isSignedIn() && isValidId(tagId) && existing().ownerUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(tagId) &&
+                    (resource == null || existing().ownerUid == request.auth.uid);
       allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
 
       allow create: if isSignedIn() &&
@@ -530,7 +599,8 @@ service cloud.firestore {
 
     // 8. letterbox/{letterId} (System-controlled official Letterbox; clients cannot create)
     match /letterbox/{letterId} {
-      allow get: if isSignedIn() && isValidId(letterId) && existing().recipientUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(letterId) &&
+                    (resource == null || existing().recipientUid == request.auth.uid);
       allow list: if isSignedIn() && existing().recipientUid == request.auth.uid;
 
       allow create: if false;
@@ -556,7 +626,8 @@ service cloud.firestore {
 
     // 9. linkedDevices/{deviceId}
     match /linkedDevices/{deviceId} {
-      allow get: if isSignedIn() && isValidId(deviceId) && existing().ownerUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(deviceId) &&
+                    (resource == null || existing().ownerUid == request.auth.uid);
       allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
 
       allow create: if isSignedIn() &&
@@ -588,7 +659,8 @@ service cloud.firestore {
 
     // 9b. deviceLinkTokens/{tokenId} (Short-lived single-use QR pairing tokens)
     match /deviceLinkTokens/{tokenId} {
-      allow get: if isSignedIn() && isValidId(tokenId) && existing().ownerUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(tokenId) &&
+                    (resource == null || existing().ownerUid == request.auth.uid);
       allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
 
       allow create: if isSignedIn() &&
@@ -660,7 +732,8 @@ service cloud.firestore {
 
     // 11. notifications/{notificationId}
     match /notifications/{notificationId} {
-      allow get: if isSignedIn() && isValidId(notificationId) && existing().recipientUid == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(notificationId) &&
+                    (resource == null || existing().recipientUid == request.auth.uid);
       allow list: if isSignedIn() && existing().recipientUid == request.auth.uid;
 
       allow create: if isSignedIn() &&
@@ -744,6 +817,95 @@ service cloud.firestore {
                        ]);
 
       allow delete: if false;
+    }
+
+    // 14. groups/{groupId} (Multi-user group chats)
+    match /groups/{groupId} {
+      allow get: if isSignedIn() && isValidId(groupId);
+      allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(groupId) &&
+                       incoming().creatorUid == request.auth.uid &&
+                       request.auth.uid in incoming().adminUids &&
+                       request.auth.uid in incoming().participantUids &&
+                       isValidGroupThread(incoming()) &&
+                       incoming().keys().hasAll([
+                         'name', 'creatorUid', 'adminUids', 'participantUids', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'name', 'description', 'creatorUid', 'adminUids', 'participantUids',
+                         'photoUrl', 'inviteCode', 'allowQrJoin',
+                         'lastMessageText', 'lastMessageSenderUid', 'lastMessageAt',
+                         'createdAt', 'updatedAt'
+                       ]);
+
+      allow update: if isSignedIn() &&
+                       isValidId(groupId) &&
+                       incoming().creatorUid == existing().creatorUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidGroupThread(incoming()) &&
+                       (
+                         (
+                           request.auth.uid in existing().participantUids &&
+                           request.auth.uid in existing().adminUids &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'name', 'description', 'adminUids', 'participantUids', 'photoUrl',
+                             'inviteCode', 'allowQrJoin',
+                             'lastMessageText', 'lastMessageSenderUid', 'lastMessageAt', 'updatedAt'
+                           ])
+                         ) ||
+                         (
+                           request.auth.uid in existing().participantUids &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'lastMessageText', 'lastMessageSenderUid', 'lastMessageAt', 'updatedAt'
+                           ])
+                         ) ||
+                         (
+                           // Participant leaving group (removing only themselves)
+                           request.auth.uid in existing().participantUids &&
+                           !(request.auth.uid in incoming().participantUids) &&
+                           incoming().participantUids.size() == existing().participantUids.size() - 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['participantUids', 'updatedAt'])
+                         ) ||
+                         (
+                           // Non-member joining group via Group QR scan (adds ONLY self, preserves existing members)
+                           !(request.auth.uid in existing().participantUids) &&
+                           request.auth.uid in incoming().participantUids &&
+                           incoming().participantUids.hasAll(existing().participantUids) &&
+                           incoming().participantUids.size() == existing().participantUids.size() + 1 &&
+                           existing().get('allowQrJoin', true) == true &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['participantUids', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(groupId) && request.auth.uid in existing().adminUids;
+
+      // 15. groups/{groupId}/groupMessages/{messageId}
+      match /groupMessages/{messageId} {
+        allow get: if isSignedIn() && isValidId(groupId) && isValidId(messageId) &&
+                      exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                      request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.participantUids;
+        allow list: if isSignedIn() && isValidId(groupId) &&
+                       exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                       request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.participantUids;
+
+        allow create: if isSignedIn() &&
+                         isValidId(groupId) &&
+                         isValidId(messageId) &&
+                         incoming().senderUid == request.auth.uid &&
+                         exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                         request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.participantUids &&
+                         isValidGroupMessage(incoming(), groupId) &&
+                         incoming().keys().hasAll(['groupId', 'senderUid', 'senderName', 'text', 'createdAt']) &&
+                         incoming().keys().hasOnly([
+                           'groupId', 'senderUid', 'senderName', 'text', 'mediaUrl',
+                           'replyToMessageId', 'replyToSenderName', 'replyToText',
+                           'forwardedCount', 'participantUids', 'createdAt'
+                         ]);
+
+        allow update, delete: if false;
+      }
     }
   }
 }

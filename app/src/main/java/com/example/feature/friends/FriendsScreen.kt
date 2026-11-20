@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -36,8 +37,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -65,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +78,8 @@ import com.example.core.model.FriendConnection
 import com.example.core.model.FriendTag
 import com.example.core.model.UserIdDirectoryEntry
 import com.example.core.qr.QrPayload
+import com.example.ui.components.FriendsMeetBackdrop
+import com.example.ui.components.GlassCard
 import com.example.ui.components.QrScannerView
 import com.example.ui.components.UserAvatar
 import com.example.ui.components.parseColorHex
@@ -110,12 +113,19 @@ fun FriendsScreen(
     }
   }
 
+  LaunchedEffect(state.lookupResult) {
+    if (state.lookupResult != null) {
+      showAddFriendDialog = false
+    }
+  }
+
   state.lookupResult?.let { peer ->
     val alreadyFriend = state.friends.any { it.friendUid == peer.uid && !it.blocked }
     ProfilePreviewDialog(
       peer = peer,
       isAlreadyFriend = alreadyFriend,
       isBusy = state.isProcessingAction,
+      error = state.lookupError,
       onAddFriendAndChat = {
         viewModel.addFriendAndOpenChat(peer, state.lookupSource) { chatId, friendUid ->
           showAddFriendDialog = false
@@ -138,10 +148,14 @@ fun FriendsScreen(
       isSearching = state.isSearchingUid,
       onSearchUid = { uid -> viewModel.lookupByUidOrQr(uid, AddedVia.UID_LOOKUP) },
       onOpenScanner = {
+        viewModel.clearLookupError()
         showAddFriendDialog = false
         showQrScanner = true
       },
-      onDismiss = { showAddFriendDialog = false },
+      onDismiss = {
+        viewModel.clearLookupError()
+        showAddFriendDialog = false
+      },
     )
   }
 
@@ -187,6 +201,7 @@ fun FriendsScreen(
   }
 
   if (showQrScanner) {
+    BackHandler { showQrScanner = false }
     Scaffold(
       topBar = {
         TopAppBar(
@@ -207,8 +222,16 @@ fun FriendsScreen(
           onQrDecoded = { raw ->
             showQrScanner = false
             val payload = QrPayload.parse(raw)
-            if (payload is QrPayload.FriendProfile) {
-              viewModel.lookupByUidOrQr(payload.friendsMeetUid, AddedVia.QR_CODE)
+            when (payload) {
+              is QrPayload.FriendProfile -> {
+                viewModel.lookupByUidOrQr(payload.friendsMeetUid, AddedVia.QR_CODE)
+              }
+              is QrPayload.GroupInvite -> {
+                viewModel.reportStatusError("That is a Group QR code. Go to Chats -> Groups to scan and join directly.")
+              }
+              else -> {
+                viewModel.reportStatusError("Invalid QR code. Scan a Friends Meet profile QR.")
+              }
             }
           }
         )
@@ -219,8 +242,12 @@ fun FriendsScreen(
 
   Scaffold(
     snackbarHost = { SnackbarHost(snackbarHostState) },
+    containerColor = Color.Transparent,
     topBar = {
       TopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(
+          containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+        ),
         title = {
           Column {
             Text("Friends", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -239,7 +266,10 @@ fun FriendsScreen(
             Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan Friend QR")
           }
           IconButton(
-            onClick = { showAddFriendDialog = true },
+            onClick = {
+              viewModel.clearLookupError()
+              showAddFriendDialog = true
+            },
             modifier = Modifier.minimumInteractiveComponentSize().testTag("friends_add_button"),
           ) {
             Icon(Icons.Default.PersonAdd, contentDescription = "Add friend by UID")
@@ -248,7 +278,8 @@ fun FriendsScreen(
       )
     },
   ) { innerPadding ->
-    Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+    FriendsMeetBackdrop(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+      Column(modifier = Modifier.fillMaxSize()) {
       OutlinedTextField(
         value = state.searchQuery,
         onValueChange = viewModel::updateSearchQuery,
@@ -330,6 +361,7 @@ fun FriendsScreen(
           }
         }
       }
+      }
     }
   }
 }
@@ -353,9 +385,8 @@ private fun FriendListRow(
   var showReactionRow by remember { mutableStateOf(false) }
   var showThreeDotMenu by remember { mutableStateOf(false) }
 
-  Card(
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+  GlassCard(
+    cornerRadius = 18.dp,
     modifier =
       Modifier.fillMaxWidth()
         .clickable(onClick = onOpenChat)

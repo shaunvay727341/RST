@@ -264,22 +264,27 @@ class RegistrationRepository(
 
   suspend fun syncPresence(uid: String, friendsMeetUid: String?, online: Boolean) {
     try {
-      firestore
-        .collection(FirestorePaths.USERS)
-        .document(uid)
-        .update(
-          mapOf(
-            "online" to online,
-            "lastSeenAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp(),
-          )
+      val identityPublicKey =
+        if (online) e2eeCryptoManager.getOrCreateIdentityPublicKeyBase64(uid) else null
+      val userUpdates =
+        mutableMapOf<String, Any>(
+          "online" to online,
+          "lastSeenAt" to FieldValue.serverTimestamp(),
+          "updatedAt" to FieldValue.serverTimestamp(),
         )
-        .await()
+      if (!identityPublicKey.isNullOrBlank()) {
+        userUpdates["identityPublicKey"] = identityPublicKey
+      }
+      firestore.collection(FirestorePaths.USERS).document(uid).update(userUpdates).await()
       if (!friendsMeetUid.isNullOrBlank()) {
+        val dirUpdates = mutableMapOf<String, Any>("online" to online)
+        if (!identityPublicKey.isNullOrBlank()) {
+          dirUpdates["identityPublicKey"] = identityPublicKey
+        }
         firestore
           .collection(FirestorePaths.USER_IDS)
           .document(friendsMeetUid)
-          .update(mapOf("online" to online))
+          .update(dirUpdates)
           .await()
       }
     } catch (_: Exception) {

@@ -35,4 +35,22 @@ sealed interface FriendsMeetRoute {
     val peerPhotoUrl: String? = null,
     val peerOnline: Boolean = false,
   ) : FriendsMeetRoute
+
+  @Serializable data object OldChatDirectoryRoute : FriendsMeetRoute
+
+  @Serializable
+  data class OldChatRoute(
+    val chatId: String,
+    val peerUid: String,
+    val peerName: String,
+    val peerPhotoUrl: String? = null,
+    val initialLimit: Int = 3,
+  ) : FriendsMeetRoute
+
+  @Serializable data object GroupListRoute : FriendsMeetRoute
+
+  @Serializable
+  data class GroupChatRoute(val groupId: String, val groupName: String) : FriendsMeetRoute
+
+  @Serializable data object CreateGroupRoute : FriendsMeetRoute
 }

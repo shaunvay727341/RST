@@ -8,7 +8,6 @@ import com.example.core.model.CallStatus
 import com.example.core.model.CallType
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import java.util.UUID
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -31,8 +30,6 @@ class CallRepository(private val firestore: FirebaseFirestore) {
       firestore
         .collection(FirestorePaths.CALLS)
         .whereArrayContains("participantUids", myUid)
-        .orderBy("createdAt", Query.Direction.DESCENDING)
-        .limit(5)
         .addSnapshotListener { snap, err ->
           if (err != null) {
             handleFirestoreError(err, OperationType.LIST, FirestorePaths.CALLS)
@@ -42,9 +39,10 @@ class CallRepository(private val firestore: FirebaseFirestore) {
             snap
               ?.documents
               ?.mapNotNull { it.toObject(CallSession::class.java) }
-              ?.firstOrNull {
+              ?.filter {
                 it.calleeUid == myUid && it.status == CallStatus.RINGING.name
               }
+              ?.maxByOrNull { it.createdAt?.toDate()?.time ?: 0L }
           trySend(ringing)
         }
     awaitClose { reg.remove() }
@@ -117,22 +115,26 @@ class CallRepository(private val firestore: FirebaseFirestore) {
     }
     firestore.collection(FirestorePaths.CALLS).document(callId).set(doc).await()
 
-    firestore
-      .collection(FirestorePaths.NOTIFICATIONS)
-      .document("notif_${UUID.randomUUID().toString().replace("-", "").take(16)}")
-      .set(
-        mapOf(
-          "recipientUid" to calleeUid,
-          "senderUid" to callerUid,
-          "type" to "CALL",
-          "title" to "Incoming ${callType.name.lowercase()} call",
-          "body" to "$callerName is calling you on Friends Meet",
-          "targetId" to callId,
-          "read" to false,
-          "createdAt" to FieldValue.serverTimestamp(),
+    try {
+      firestore
+        .collection(FirestorePaths.NOTIFICATIONS)
+        .document("notif_${UUID.randomUUID().toString().replace("-", "").take(16)}")
+        .set(
+          mapOf(
+            "recipientUid" to calleeUid,
+            "senderUid" to callerUid,
+            "type" to "CALL",
+            "title" to "Incoming ${callType.name.lowercase()} call",
+            "body" to "$callerName is calling you on Friends Meet",
+            "targetId" to callId,
+            "read" to false,
+            "createdAt" to FieldValue.serverTimestamp(),
+          )
         )
-      )
-      .await()
+        .await()
+    } catch (_: Exception) {
+      // Non-fatal notification log
+    }
 
     return callId
   }

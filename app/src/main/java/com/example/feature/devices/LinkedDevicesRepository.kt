@@ -11,7 +11,6 @@ import com.example.core.security.SecureKeyStoreHelper
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import com.google.firebase.functions.FirebaseFunctions
 import java.util.Date
 import java.util.UUID
@@ -32,15 +31,17 @@ class LinkedDevicesRepository(
       firestore
         .collection(FirestorePaths.LINKED_DEVICES)
         .whereEqualTo("ownerUid", ownerUid)
-        .whereEqualTo("active", true)
-        .orderBy("createdAt", Query.Direction.DESCENDING)
         .addSnapshotListener { snap, err ->
           if (err != null) {
             handleFirestoreError(err, OperationType.LIST, FirestorePaths.LINKED_DEVICES)
             return@addSnapshotListener
           }
           val list =
-            snap?.documents?.mapNotNull { it.toObject(LinkedDevice::class.java) } ?: emptyList()
+            snap
+              ?.documents
+              ?.mapNotNull { it.toObject(LinkedDevice::class.java) }
+              ?.filter { it.active }
+              ?.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L } ?: emptyList()
           trySend(list)
         }
     awaitClose { reg.remove() }
@@ -73,10 +74,11 @@ class LinkedDevicesRepository(
       firestore
         .collection(FirestorePaths.LINKED_DEVICES)
         .whereEqualTo("ownerUid", uid)
-        .whereEqualTo("active", true)
         .get()
         .await()
-    require(active.size() < 2) { "Maximum of 2 linked devices allowed." }
+        .documents
+        .count { it.getBoolean("active") == true }
+    require(active < 2) { "Maximum of 2 linked devices allowed." }
 
     val tokenId = "tok_${UUID.randomUUID().toString().replace("-", "").take(20)}"
     val expiresMs = System.currentTimeMillis() + 5L * 60L * 1000L
@@ -131,14 +133,15 @@ class LinkedDevicesRepository(
       // Fallback to rule-verified atomic transaction below
     }
 
-    val activeSnap =
+    val activeCount =
       firestore
         .collection(FirestorePaths.LINKED_DEVICES)
         .whereEqualTo("ownerUid", currentUid)
-        .whereEqualTo("active", true)
         .get()
         .await()
-    require(activeSnap.size() < 2) { "Maximum of 2 linked devices already active." }
+        .documents
+        .count { it.getBoolean("active") == true }
+    require(activeCount < 2) { "Maximum of 2 linked devices already active." }
 
     firestore
       .runTransaction { tx ->

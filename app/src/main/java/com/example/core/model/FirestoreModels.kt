@@ -191,6 +191,11 @@ data class ChatThread(
   val themeId: String? = null,
   val typingUids: List<String> = emptyList(),
   val e2eeSessionVersion: Long = 1L,
+  val chatMode: String = "FRIEND",
+  val oldChatInitiatorUid: String? = null,
+  val oldChatMessageLimit: Long = 3L,
+  val oldChatSentCount: Long = 0L,
+  val oldChatUnlocked: Boolean = false,
   val createdAt: Timestamp? = null,
   val updatedAt: Timestamp? = null,
 )
@@ -356,3 +361,39 @@ data class DeviceLinkToken(
   val createdAt: Timestamp? = null,
   val updatedAt: Timestamp? = null,
 )
+
+@Keep
+@IgnoreExtraProperties
+data class GroupThread(
+  @DocumentId val id: String = "",
+  val name: String = "",
+  val description: String? = null,
+  val creatorUid: String = "",
+  val adminUids: List<String> = emptyList(),
+  val participantUids: List<String> = emptyList(),
+  val photoUrl: String? = null,
+  val inviteCode: String? = null,
+  val allowQrJoin: Boolean = true,
+  val lastMessageText: String? = null,
+  val lastMessageSenderUid: String? = null,
+  val lastMessageAt: Timestamp? = null,
+  val createdAt: Timestamp? = null,
+  val updatedAt: Timestamp? = null,
+)
+
+@Keep
+@IgnoreExtraProperties
+data class GroupMessage(
+  @DocumentId val id: String = "",
+  val groupId: String = "",
+  val senderUid: String = "",
+  val senderName: String = "",
+  val text: String = "",
+  val mediaUrl: String? = null,
+  val replyToMessageId: String? = null,
+  val replyToSenderName: String? = null,
+  val replyToText: String? = null,
+  val forwardedCount: Long = 0L,
+  val createdAt: Timestamp? = null,
+)
+

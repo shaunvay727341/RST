@@ -101,6 +101,11 @@
         "themeId": { "type": "string" },
         "typingUids": { "type": "array", "description": "Active typing UIDs (max 2)" },
         "e2eeSessionVersion": { "type": "integer" },
+        "chatMode": { "type": "string", "enum": ["FRIEND", "OLD_CHAT"], "description": "FRIEND or OLD_CHAT mode" },
+        "oldChatInitiatorUid": { "type": "string", "description": "UID of user who initiated Old Chat" },
+        "oldChatMessageLimit": { "type": "integer", "description": "Max initiator messages before peer reply (default 3)" },
+        "oldChatSentCount": { "type": "integer", "description": "Count of initiator messages sent before unlock" },
+        "oldChatUnlocked": { "type": "boolean", "description": "Becomes true once recipient replies (unlimited)" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -335,6 +340,45 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["ownerUid", "tokenId", "primaryDevicePublicKey", "used", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "GroupThread": {
+      "title": "GroupThread",
+      "description": "Multi-user group chat metadata.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "creatorUid": { "type": "string" },
+        "adminUids": { "type": "array" },
+        "participantUids": { "type": "array" },
+        "photoUrl": { "type": "string" },
+        "inviteCode": { "type": "string" },
+        "allowQrJoin": { "type": "boolean" },
+        "lastMessageText": { "type": "string" },
+        "lastMessageSenderUid": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "creatorUid", "adminUids", "participantUids", "createdAt", "updatedAt"]
+    },
+    "GroupMessage": {
+      "title": "GroupMessage",
+      "description": "Message inside a group chat.",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "replyToMessageId": { "type": "string" },
+        "replyToSenderName": { "type": "string" },
+        "replyToText": { "type": "string" },
+        "forwardedCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["groupId", "senderUid", "senderName", "text", "createdAt"]
     }
   },
   "firestore": {
@@ -344,7 +388,7 @@
     },
     "/userIds/{friendsMeetUid}": {
       "schema": { "$ref": "#/entities/UserIdDirectoryEntry" },
-      "description": "8-digit numeric UID lookup registry without PII."
+      "description": "8-digit numeric UID lookup and Old Chat global directory without PII."
     },
     "/friends/{connectionId}": {
       "schema": { "$ref": "#/entities/FriendConnection" },
@@ -352,7 +396,7 @@
     },
     "/chats/{chatId}": {
       "schema": { "$ref": "#/entities/ChatThread" },
-      "description": "1-to-1 chat threads scoped to 2 participants."
+      "description": "1-to-1 and Old Chat threads scoped to 2 participants."
     },
     "/chats/{chatId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },
@@ -397,6 +441,14 @@
     "/userSettings/{uid}": {
       "schema": { "$ref": "#/entities/UserSettings" },
       "description": "Theme mode, quick messages, and app preferences."
+    },
+    "/groups/{groupId}": {
+      "schema": { "$ref": "#/entities/GroupThread" },
+      "description": "Multi-user group chat metadata scoped to participants."
+    },
+    "/groups/{groupId}/groupMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/GroupMessage" },
+      "description": "Messages inside a group chat scoped to group participants."
     }
   }
 }

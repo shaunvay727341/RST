@@ -1,6 +1,11 @@
 package com.example.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -14,12 +19,8 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
@@ -35,8 +36,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -52,6 +53,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.core.datastore.ThemeMode
 import com.example.core.di.AppContainer
+import com.example.core.firebase.FirestorePaths
 import com.example.core.model.AddedVia
 import com.example.core.model.CallStatus
 import com.example.core.model.CallType
@@ -70,7 +72,13 @@ import com.example.feature.chat.ChatsListScreen
 import com.example.feature.devices.LinkedDevicesScreen
 import com.example.feature.friends.FriendsScreen
 import com.example.feature.friends.FriendsViewModel
+import com.example.feature.group.CreateGroupScreen
+import com.example.feature.group.GroupChatScreen
+import com.example.feature.group.GroupListScreen
+import com.example.feature.group.GroupViewModel
 import com.example.feature.letterbox.LetterboxScreen
+import com.example.feature.oldchat.OldChatDirectoryScreen
+import com.example.feature.oldchat.OldChatRepository
 import com.example.feature.registration.GuardianVerificationScreen
 import com.example.feature.registration.RegistrationRepository
 import com.example.feature.registration.RegistrationScreen
@@ -79,6 +87,9 @@ import com.example.feature.settings.BackupRestoreScreen
 import com.example.feature.settings.PrivacySettingsScreen
 import com.example.feature.settings.SettingsScreen
 import com.example.feature.settings.ViewFriendProfileScreen
+import com.example.ui.components.FriendsMeetBackdrop
+import com.example.ui.components.LiquidGlassNavigationBar
+import com.example.ui.components.LiquidNavItem
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -301,6 +312,14 @@ private fun AuthenticatedShell(
   val friendsByUid = remember(friendsState.friends) {
     friendsState.friends.associateBy { it.friendUid }
   }
+  val userGroups by
+    appContainer.groupRepository
+      .observeUserGroups(profile.uid)
+      .collectAsStateWithLifecycle(emptyList())
+  val oldChatRepo = remember(appContainer.firestore) { OldChatRepository(appContainer.firestore) }
+  val directoryUsers by
+    oldChatRepo.observeAllDirectoryUsers(profile.uid).collectAsStateWithLifecycle(emptyList())
+  val directoryUsersByUid = remember(directoryUsers) { directoryUsers.associateBy { it.uid } }
 
   val initiateCall: (friendUid: String, callType: CallType) -> Unit = { peerUid, callType ->
     scope.launch {
@@ -372,87 +391,133 @@ private fun AuthenticatedShell(
     }
   }
 
-  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-    val useNavRail = maxWidth >= 600.dp
+  val selectedNavIndex =
+    when {
+      currentDest?.hasRoute<FriendsMeetRoute.FriendsRoute>() == true -> 0
+      currentDest?.hasRoute<FriendsMeetRoute.ChatsTabRoute>() == true -> 1
+      currentDest?.hasRoute<FriendsMeetRoute.LetterboxRoute>() == true -> 2
+      currentDest?.hasRoute<FriendsMeetRoute.SettingsRoute>() == true -> 3
+      else -> 0
+    }
 
-    Scaffold(
-      contentWindowInsets = WindowInsets.safeDrawing,
-      bottomBar = {
-        if (isTopLevelTab && !useNavRail) {
-          NavigationBar {
-            NavigationBarItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.FriendsRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.FriendsRoute) },
-              icon = { Icon(Icons.Default.People, contentDescription = "Friends") },
-              label = { Text("Friends") },
-              modifier = Modifier.testTag("nav_friends_tab"),
-            )
-            NavigationBarItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.ChatsTabRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.ChatsTabRoute) },
-              icon = { Icon(Icons.Default.ChatBubble, contentDescription = "Chats") },
-              label = { Text("Chats") },
-              modifier = Modifier.testTag("nav_chats_tab"),
-            )
-            NavigationBarItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.LetterboxRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.LetterboxRoute) },
-              icon = {
-                BadgedBox(
-                  badge = { if (unreadLetterCount > 0) Badge { Text("$unreadLetterCount") } }
-                ) {
-                  Icon(Icons.Default.MarkEmailUnread, contentDescription = "Letterbox")
+  val liquidNavItems =
+    listOf(
+      LiquidNavItem(
+        label = "Friends",
+        icon = Icons.Default.People,
+        testTag = "nav_friends_tab",
+      ),
+      LiquidNavItem(
+        label = "Chats",
+        icon = Icons.Default.ChatBubble,
+        testTag = "nav_chats_tab",
+      ),
+      LiquidNavItem(
+        label = "Letterbox",
+        icon = Icons.Default.MarkEmailUnread,
+        badgeCount = unreadLetterCount,
+        testTag = "nav_letterbox_tab",
+      ),
+      LiquidNavItem(
+        label = "Settings",
+        icon = Icons.Default.Settings,
+        testTag = "nav_settings_tab",
+      ),
+    )
+
+  FriendsMeetBackdrop(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+      val useNavRail = maxWidth >= 600.dp
+
+      Scaffold(
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        bottomBar = {
+          if (isTopLevelTab && !useNavRail) {
+            LiquidGlassNavigationBar(
+              items = liquidNavItems,
+              selectedIndex = selectedNavIndex,
+              onSelect = { idx ->
+                when (idx) {
+                  0 -> navigateTopTab(FriendsMeetRoute.FriendsRoute)
+                  1 -> navigateTopTab(FriendsMeetRoute.ChatsTabRoute)
+                  2 -> navigateTopTab(FriendsMeetRoute.LetterboxRoute)
+                  3 -> navigateTopTab(FriendsMeetRoute.SettingsRoute)
                 }
               },
-              label = { Text("Letterbox") },
-              modifier = Modifier.testTag("nav_letterbox_tab"),
-            )
-            NavigationBarItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.SettingsRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.SettingsRoute) },
-              icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-              label = { Text("Settings") },
-              modifier = Modifier.testTag("nav_settings_tab"),
             )
           }
-        }
-      },
-    ) { innerPadding ->
-      Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-        if (isTopLevelTab && useNavRail) {
-          NavigationRail(modifier = Modifier.fillMaxHeight()) {
-            NavigationRailItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.FriendsRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.FriendsRoute) },
-              icon = { Icon(Icons.Default.People, contentDescription = "Friends") },
-              label = { Text("Friends") },
-            )
-            NavigationRailItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.ChatsTabRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.ChatsTabRoute) },
-              icon = { Icon(Icons.Default.ChatBubble, contentDescription = "Chats") },
-              label = { Text("Chats") },
-            )
-            NavigationRailItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.LetterboxRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.LetterboxRoute) },
-              icon = { Icon(Icons.Default.MarkEmailUnread, contentDescription = "Letterbox") },
-              label = { Text("Letterbox") },
-            )
-            NavigationRailItem(
-              selected = currentDest?.hasRoute<FriendsMeetRoute.SettingsRoute>() == true,
-              onClick = { navigateTopTab(FriendsMeetRoute.SettingsRoute) },
-              icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-              label = { Text("Settings") },
-            )
+        },
+      ) { innerPadding ->
+        Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+          if (isTopLevelTab && useNavRail) {
+            NavigationRail(modifier = Modifier.fillMaxHeight()) {
+              NavigationRailItem(
+                selected = currentDest?.hasRoute<FriendsMeetRoute.FriendsRoute>() == true,
+                onClick = { navigateTopTab(FriendsMeetRoute.FriendsRoute) },
+                icon = { Icon(Icons.Default.People, contentDescription = "Friends") },
+                label = { Text("Friends") },
+              )
+              NavigationRailItem(
+                selected = currentDest?.hasRoute<FriendsMeetRoute.ChatsTabRoute>() == true,
+                onClick = { navigateTopTab(FriendsMeetRoute.ChatsTabRoute) },
+                icon = { Icon(Icons.Default.ChatBubble, contentDescription = "Chats") },
+                label = { Text("Chats") },
+              )
+              NavigationRailItem(
+                selected = currentDest?.hasRoute<FriendsMeetRoute.LetterboxRoute>() == true,
+                onClick = { navigateTopTab(FriendsMeetRoute.LetterboxRoute) },
+                icon = { Icon(Icons.Default.MarkEmailUnread, contentDescription = "Letterbox") },
+                label = { Text("Letterbox") },
+              )
+              NavigationRailItem(
+                selected = currentDest?.hasRoute<FriendsMeetRoute.SettingsRoute>() == true,
+                onClick = { navigateTopTab(FriendsMeetRoute.SettingsRoute) },
+                icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                label = { Text("Settings") },
+              )
+            }
           }
-        }
 
-        NavHost(
-          navController = navController,
-          startDestination = FriendsMeetRoute.FriendsRoute,
-          modifier = Modifier.weight(1f).fillMaxHeight(),
-        ) {
+          NavHost(
+            navController = navController,
+            startDestination = FriendsMeetRoute.FriendsRoute,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            enterTransition = {
+              val isTabTarget =
+                targetState.destination.hasRoute<FriendsMeetRoute.FriendsRoute>() ||
+                  targetState.destination.hasRoute<FriendsMeetRoute.ChatsTabRoute>() ||
+                  targetState.destination.hasRoute<FriendsMeetRoute.LetterboxRoute>() ||
+                  targetState.destination.hasRoute<FriendsMeetRoute.SettingsRoute>()
+              if (isTabTarget) {
+                fadeIn(animationSpec = tween(220))
+              } else {
+                fadeIn(animationSpec = tween(240)) +
+                  slideInHorizontally(animationSpec = tween(260)) { it / 6 }
+              }
+            },
+            exitTransition = {
+              val isTabTarget =
+                targetState.destination.hasRoute<FriendsMeetRoute.FriendsRoute>() ||
+                  targetState.destination.hasRoute<FriendsMeetRoute.ChatsTabRoute>() ||
+                  targetState.destination.hasRoute<FriendsMeetRoute.LetterboxRoute>() ||
+                  targetState.destination.hasRoute<FriendsMeetRoute.SettingsRoute>()
+              if (isTabTarget) {
+                fadeOut(animationSpec = tween(180))
+              } else {
+                fadeOut(animationSpec = tween(180)) +
+                  slideOutHorizontally(animationSpec = tween(240)) { -it / 8 }
+              }
+            },
+            popEnterTransition = {
+              fadeIn(animationSpec = tween(220)) +
+                slideInHorizontally(animationSpec = tween(240)) { -it / 8 }
+            },
+            popExitTransition = {
+              fadeOut(animationSpec = tween(180)) +
+                slideOutHorizontally(animationSpec = tween(240)) { it / 6 }
+            },
+          ) {
           composable<FriendsMeetRoute.FriendsRoute> {
             FriendsScreen(
               viewModel = friendsVm,
@@ -486,9 +551,118 @@ private fun AuthenticatedShell(
               myUid = profile.uid,
               threads = chatThreads,
               friendsByUid = friendsByUid,
+              directoryUsersByUid = directoryUsersByUid,
               onOpenChat = { chatId, friendUid ->
                 navController.navigate(FriendsMeetRoute.ChatRoute(chatId, friendUid))
               },
+              onOpenOldChatDirectory = {
+                navController.navigate(FriendsMeetRoute.OldChatDirectoryRoute)
+              },
+              onOpenGroups = {
+                navController.navigate(FriendsMeetRoute.GroupListRoute)
+              },
+            )
+          }
+
+          composable<FriendsMeetRoute.OldChatDirectoryRoute> {
+            OldChatDirectoryScreen(
+              users = directoryUsers,
+              onStartOldChat = { peerUid, peerName, peerPhotoUrl, initialLimit ->
+                val chatId = FirestorePaths.canonicalChatId(profile.uid, peerUid)
+                navController.navigate(
+                  FriendsMeetRoute.OldChatRoute(
+                    chatId = chatId,
+                    peerUid = peerUid,
+                    peerName = peerName,
+                    peerPhotoUrl = peerPhotoUrl,
+                    initialLimit = initialLimit,
+                  )
+                )
+              },
+              onBack = { navController.popBackStack() },
+            )
+          }
+
+          composable<FriendsMeetRoute.GroupListRoute> {
+            val groupVm = viewModel<GroupViewModel>(key = "group_${profile.uid}") {
+              GroupViewModel(appContainer.groupRepository, profile.uid, appContainer.chatRepository)
+            }
+            val groups by groupVm.groups.collectAsStateWithLifecycle()
+            val groupError by groupVm.errorMessage.collectAsStateWithLifecycle()
+            val groupBusy by groupVm.isBusy.collectAsStateWithLifecycle()
+            GroupListScreen(
+              groups = groups,
+              errorMessage = groupError,
+              isBusy = groupBusy,
+              onClearError = groupVm::clearError,
+              onJoinByQr = { raw ->
+                groupVm.joinGroupByQr(raw) { joined ->
+                  navController.navigate(FriendsMeetRoute.GroupChatRoute(joined.id, joined.name))
+                }
+              },
+              onSelectGroup = { groupId, groupName ->
+                navController.navigate(FriendsMeetRoute.GroupChatRoute(groupId, groupName))
+              },
+              onCreateGroup = {
+                navController.navigate(FriendsMeetRoute.CreateGroupRoute)
+              },
+              onBack = { navController.popBackStack() },
+            )
+          }
+
+          composable<FriendsMeetRoute.CreateGroupRoute> {
+            val groupVm = viewModel<GroupViewModel>(key = "group_create_${profile.uid}") {
+              GroupViewModel(appContainer.groupRepository, profile.uid, appContainer.chatRepository)
+            }
+            val groupBusy by groupVm.isBusy.collectAsStateWithLifecycle()
+            val groupError by groupVm.errorMessage.collectAsStateWithLifecycle()
+            CreateGroupScreen(
+              friends = friendsState.friends.map { f ->
+                UserProfile(
+                  uid = f.friendUid,
+                  friendsMeetUid = f.friendMeetUid,
+                  fullName = f.friendName,
+                  photoUrl = f.friendPhotoUrl,
+                  online = f.friendOnline,
+                )
+              },
+              directoryUsers = directoryUsers,
+              isBusy = groupBusy,
+              errorMessage = groupError,
+              onClearError = groupVm::clearError,
+              onCreate = { name, desc, members ->
+                groupVm.createGroup(name, desc, profile.fullName, members) { groupId ->
+                  navController.popBackStack()
+                  navController.navigate(FriendsMeetRoute.GroupChatRoute(groupId, name))
+                }
+              },
+              onBack = { navController.popBackStack() },
+            )
+          }
+
+          composable<FriendsMeetRoute.GroupChatRoute> { backStackEntry ->
+            val args = backStackEntry.toRoute<FriendsMeetRoute.GroupChatRoute>()
+            val groupVm = viewModel<GroupViewModel>(key = "group_chat_${args.groupId}") {
+              GroupViewModel(appContainer.groupRepository, profile.uid, appContainer.chatRepository)
+            }
+            GroupChatScreen(
+              groupId = args.groupId,
+              groupName = args.groupName,
+              currentUser = profile,
+              viewModel = groupVm,
+              directoryUsersByUid = directoryUsersByUid,
+              friends = friendsState.friends.map { f ->
+                UserProfile(
+                  uid = f.friendUid,
+                  friendsMeetUid = f.friendMeetUid,
+                  fullName = f.friendName,
+                  photoUrl = f.friendPhotoUrl,
+                  online = f.friendOnline,
+                )
+              },
+              allGroups = userGroups,
+              friendsList = friendsState.friends,
+              onBack = { navController.popBackStack() },
             )
           }
 
@@ -549,6 +723,51 @@ private fun AuthenticatedShell(
               onStartAudioCall = { initiateCall(args.friendUid, CallType.AUDIO) },
               onStartVideoCall = { initiateCall(args.friendUid, CallType.VIDEO) },
               onBack = { navController.popBackStack() },
+              onAddFriend = { chatVm.addPeerAsFriend(appContainer.friendsRepository) },
+              groupsList = userGroups,
+              onForwardToGroup = { targetGroup ->
+                chatVm.forwardSelectedToGroup(targetGroup, appContainer.groupRepository)
+              },
+            )
+          }
+
+          composable<FriendsMeetRoute.OldChatRoute> { backStackEntry ->
+            val args = backStackEntry.toRoute<FriendsMeetRoute.OldChatRoute>()
+            val chatVm =
+              viewModel<ChatViewModel>(key = "oldchat_${args.chatId}") {
+                ChatViewModel(
+                  chatRepository = appContainer.chatRepository,
+                  e2eeCryptoManager = appContainer.e2eeCryptoManager,
+                  chatId = args.chatId,
+                  myUid = profile.uid,
+                  myName = profile.fullName,
+                  friendUid = args.peerUid,
+                  initialIsOldChat = true,
+                  initialOldChatLimit = args.initialLimit,
+                  initialPeerName = args.peerName,
+                  initialPeerPhotoUrl = args.peerPhotoUrl,
+                )
+              }
+            val friend = friendsByUid[args.peerUid]
+            LaunchedEffect(friend) { chatVm.attachFriendInfo(friend) }
+
+            ChatScreen(
+              viewModel = chatVm,
+              myUid = profile.uid,
+              friendsList = friendsState.friends,
+              quickMessages =
+                userSettings?.quickMessages?.ifEmpty {
+                  RegistrationRepository.DEFAULT_QUICK_MESSAGES
+                } ?: RegistrationRepository.DEFAULT_QUICK_MESSAGES,
+              onSaveQuickMessages = friendsVm::updateQuickMessages,
+              onStartAudioCall = { initiateCall(args.peerUid, CallType.AUDIO) },
+              onStartVideoCall = { initiateCall(args.peerUid, CallType.VIDEO) },
+              onBack = { navController.popBackStack() },
+              onAddFriend = { chatVm.addPeerAsFriend(appContainer.friendsRepository) },
+              groupsList = userGroups,
+              onForwardToGroup = { targetGroup ->
+                chatVm.forwardSelectedToGroup(targetGroup, appContainer.groupRepository)
+              },
             )
           }
 
@@ -605,19 +824,26 @@ private fun AuthenticatedShell(
 
           composable<FriendsMeetRoute.ViewProfileRoute> { backStackEntry ->
             val args = backStackEntry.toRoute<FriendsMeetRoute.ViewProfileRoute>()
+            DisposableEffect(args.peerUid) {
+              friendsVm.clearLookupError()
+              onDispose { friendsVm.clearLookupError() }
+            }
             val existingFriend = friendsByUid[args.peerUid]
             val peerEntry =
-              UserIdDirectoryEntry(
-                uid = args.peerUid,
-                friendsMeetUid = args.peerMeetUid,
-                displayName = args.peerName,
-                photoUrl = args.peerPhotoUrl,
-                online = args.peerOnline,
-              )
+              directoryUsersByUid[args.peerUid]
+                ?: UserIdDirectoryEntry(
+                  uid = args.peerUid,
+                  friendsMeetUid = args.peerMeetUid,
+                  displayName = args.peerName,
+                  photoUrl = args.peerPhotoUrl,
+                  online = args.peerOnline,
+                )
             ViewFriendProfileScreen(
               peer = peerEntry,
               activeTag = friendsState.friendTags[args.peerUid],
               isFriend = existingFriend != null && !existingFriend.blocked,
+              isBusy = friendsState.isProcessingAction,
+              errorMessage = friendsState.lookupError,
               onAddOrOpenChat = {
                 if (existingFriend != null) {
                   navController.navigate(
@@ -625,7 +851,9 @@ private fun AuthenticatedShell(
                   )
                 } else {
                   friendsVm.addFriendAndOpenChat(peerEntry, AddedVia.UID_LOOKUP) { cId, fUid ->
-                    navController.navigate(FriendsMeetRoute.ChatRoute(cId, fUid))
+                    navController.navigate(FriendsMeetRoute.ChatRoute(cId, fUid)) {
+                      popUpTo<FriendsMeetRoute.ViewProfileRoute> { inclusive = true }
+                    }
                   }
                 }
               },
@@ -638,4 +866,5 @@ private fun AuthenticatedShell(
       }
     }
   }
+}
 }

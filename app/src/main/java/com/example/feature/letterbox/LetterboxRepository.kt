@@ -7,7 +7,6 @@ import com.example.core.model.LetterboxMessage
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import java.util.Date
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -21,8 +20,6 @@ class LetterboxRepository(private val firestore: FirebaseFirestore) {
       firestore
         .collection(FirestorePaths.LETTERBOX)
         .whereEqualTo("recipientUid", uid)
-        .whereEqualTo("trashed", trashed)
-        .orderBy("createdAt", Query.Direction.DESCENDING)
         .addSnapshotListener { snap, err ->
           if (err != null) {
             handleFirestoreError(err, OperationType.LIST, FirestorePaths.LETTERBOX)
@@ -34,8 +31,10 @@ class LetterboxRepository(private val firestore: FirebaseFirestore) {
               ?.documents
               ?.mapNotNull { it.toObject(LetterboxMessage::class.java) }
               ?.filter { msg ->
-                !trashed || msg.purgeAfterAt == null || msg.purgeAfterAt.toDate().time > nowMs
-              } ?: emptyList()
+                msg.trashed == trashed &&
+                  (!trashed || msg.purgeAfterAt == null || msg.purgeAfterAt.toDate().time > nowMs)
+              }
+              ?.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L } ?: emptyList()
           trySend(list)
         }
     awaitClose { reg.remove() }

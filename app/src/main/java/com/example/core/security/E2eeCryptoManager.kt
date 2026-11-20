@@ -108,7 +108,7 @@ class E2eeCryptoManager(private val context: Context) {
     return deriveFallbackSessionKey(chatId)
   }
 
-  private fun deriveFallbackSessionKey(chatId: String): SecretKey {
+  fun deriveFallbackSessionKey(chatId: String): SecretKey {
     val digest = MessageDigest.getInstance("SHA-256").digest("FM-PendingKey:$chatId".toByteArray())
     return SecretKeySpec(digest, "AES")
   }

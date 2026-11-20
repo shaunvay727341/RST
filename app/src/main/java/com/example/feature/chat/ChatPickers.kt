@@ -21,11 +21,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.core.model.FriendConnection
+import com.example.core.model.GroupThread
 import com.example.core.model.MessageType
 import com.example.ui.components.UserAvatar
 
@@ -300,32 +304,125 @@ fun ForwardMessagesDialog(
   selectedCount: Int,
   onSelectFriend: (FriendConnection) -> Unit,
   onDismiss: () -> Unit,
+  groups: List<GroupThread> = emptyList(),
+  onSelectGroup: (GroupThread) -> Unit = {},
 ) {
+  var query by remember { mutableStateOf("") }
+  val activeFriends = remember(friends, query) {
+    friends.filter {
+      !it.blocked && (query.isBlank() || it.friendName.contains(query.trim(), ignoreCase = true))
+    }
+  }
+  val activeGroups = remember(groups, query) {
+    groups.filter {
+      query.isBlank() || it.name.contains(query.trim(), ignoreCase = true)
+    }
+  }
+
   AlertDialog(
     onDismissRequest = onDismiss,
     title = { Text("Forward $selectedCount Message(s) (Max 10)") },
     text = {
-      LazyColumn(
-        modifier = Modifier.fillMaxWidth().height(260.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        items(friends.filter { !it.blocked }, key = { it.friendUid }) { f ->
-          Surface(
-            shape = RoundedCornerShape(12.dp),
-            tonalElevation = 1.dp,
-            modifier =
-              Modifier.fillMaxWidth().clickable {
-                onSelectFriend(f)
-                onDismiss()
-              },
-          ) {
-            Row(
-              modifier = Modifier.padding(10.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              UserAvatar(name = f.friendName, photoUrl = f.friendPhotoUrl, size = 40.dp)
-              Spacer(modifier = Modifier.width(10.dp))
-              Text(f.friendName, style = MaterialTheme.typography.titleMedium)
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+          value = query,
+          onValueChange = { query = it },
+          placeholder = { Text("Search friends or groups…") },
+          leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier.fillMaxWidth(),
+        )
+        LazyColumn(
+          modifier = Modifier.fillMaxWidth().height(260.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          if (activeGroups.isNotEmpty()) {
+            item {
+              Text(
+                text = "Groups",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+              )
+            }
+            items(activeGroups, key = { "grp_${it.id}" }) { g ->
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 1.dp,
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .clickable {
+                      onSelectGroup(g)
+                      onDismiss()
+                    },
+              ) {
+                Row(
+                  modifier = Modifier.padding(10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Group,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(8.dp),
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Column {
+                    Text(g.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                      "${g.participantUids.size} members",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
+              }
+            }
+          }
+          if (activeFriends.isNotEmpty()) {
+            item {
+              Text(
+                text = "Friends",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+              )
+            }
+            items(activeFriends, key = { it.friendUid }) { f ->
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 1.dp,
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .clickable {
+                      onSelectFriend(f)
+                      onDismiss()
+                    },
+              ) {
+                Row(
+                  modifier = Modifier.padding(10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  UserAvatar(name = f.friendName, photoUrl = f.friendPhotoUrl, size = 40.dp)
+                  Spacer(modifier = Modifier.width(10.dp))
+                  Text(f.friendName, style = MaterialTheme.typography.titleMedium)
+                }
+              }
+            }
+          }
+          if (activeFriends.isEmpty() && activeGroups.isEmpty()) {
+            item {
+              Text(
+                text = "No matching friends or groups found.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(16.dp),
+              )
             }
           }
         }
