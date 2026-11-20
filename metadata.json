@@ -1,0 +1,6 @@
+{
+  "name": "Friends Meet",
+  "description": "Real-world social communication Android app with Google Sign-In, 1-to-1 messaging, WebRTC audio/video calling, QR friend connect, linked devices, and official Letterbox.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

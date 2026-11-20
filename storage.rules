@@ -1,0 +1,55 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidImage() {
+      return request.resource.size <= 5 * 1024 * 1024 &&
+             request.resource.contentType.matches('image/(jpeg|png|webp|gif)');
+    }
+
+    function isValidVoice() {
+      return request.resource.size <= 10 * 1024 * 1024 &&
+             request.resource.contentType.matches('audio/(mp4|m4a|aac|ogg|webm)');
+    }
+
+    function isValidEncryptedBackup() {
+      return request.resource.size <= 50 * 1024 * 1024 &&
+             request.resource.contentType == 'application/octet-stream';
+    }
+
+    // Profile avatars: owner writes, signed-in users can read
+    match /profiles/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == uid && isValidImage();
+    }
+
+    // 1-to-1 encrypted chat media (images/GIFs and voice messages)
+    // chatId format is sorted(uidA, uidB) joined with "_"
+    match /chats/{chatId}/images/{messageId}/{fileName} {
+      allow read: if isSignedIn() && request.auth.uid in chatId.split('_');
+      allow write: if isSignedIn() &&
+                      request.auth.uid in chatId.split('_') &&
+                      request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    match /chats/{chatId}/voice/{messageId}/{fileName} {
+      allow read: if isSignedIn() && request.auth.uid in chatId.split('_');
+      allow write: if isSignedIn() &&
+                      request.auth.uid in chatId.split('_') &&
+                      (isValidVoice() || request.resource.contentType == 'application/octet-stream');
+    }
+
+    // User-encrypted backup archives: strictly owner-only
+    match /backups/{uid}/{backupFile} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if isSignedIn() && request.auth.uid == uid && isValidEncryptedBackup();
+    }
+  }
+}

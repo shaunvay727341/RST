@@ -1,0 +1,402 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private authenticated user account and registration profile (PII-isolated to owner).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID (matches document ID)" },
+        "friendsMeetUid": { "type": "string", "description": "Unique 8-digit numeric Friends Meet UID" },
+        "fullName": { "type": "string", "description": "User full name (2..80 chars)" },
+        "dateOfBirth": { "type": "string", "description": "ISO-8601 date string YYYY-MM-DD" },
+        "gender": { "type": "string", "enum": ["MALE", "FEMALE", "OTHER"] },
+        "phoneNumber": { "type": "string", "description": "Optional phone number" },
+        "email": { "type": "string", "description": "Verified Google account email" },
+        "photoUrl": { "type": "string", "description": "Profile picture HTTPS/Storage URL" },
+        "bio": { "type": "string", "description": "Optional user bio (max 240 chars)" },
+        "online": { "type": "boolean", "description": "Current online presence state" },
+        "lastSeenAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last activity" },
+        "isUnder13": { "type": "boolean", "description": "Derived age flag requiring guardian verification" },
+        "guardianVerified": { "type": "boolean", "description": "True once guardian 4-digit Letterbox code verified" },
+        "accountStatus": { "type": "string", "enum": ["PENDING_GUARDIAN", "ACTIVE", "SUSPENDED"] },
+        "identityPublicKey": { "type": "string", "description": "Base64 E2EE identity public key" },
+        "fcmToken": { "type": "string", "description": "Latest FCM registration token" },
+        "oneSignalPlayerId": { "type": "string", "description": "OneSignal subscription ID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": [
+        "uid",
+        "friendsMeetUid",
+        "fullName",
+        "dateOfBirth",
+        "gender",
+        "email",
+        "online",
+        "isUnder13",
+        "guardianVerified",
+        "accountStatus",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserIdDirectoryEntry": {
+      "title": "UserIdDirectoryEntry",
+      "description": "Publicly resolvable 8-digit UID lookup entry containing zero PII (no email, phone, or DOB).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "friendsMeetUid": { "type": "string", "description": "8-digit numeric UID matching document ID" },
+        "displayName": { "type": "string", "description": "Public display name" },
+        "photoUrl": { "type": "string", "description": "Optional public avatar URL" },
+        "online": { "type": "boolean", "description": "Presence flag subject to privacy settings" },
+        "accountStatus": { "type": "string", "enum": ["PENDING_GUARDIAN", "ACTIVE", "SUSPENDED"] },
+        "identityPublicKey": { "type": "string", "description": "Public key for E2EE session setup" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "friendsMeetUid", "displayName", "online", "accountStatus", "createdAt"]
+    },
+    "FriendConnection": {
+      "title": "FriendConnection",
+      "description": "User-owned friend connection entry (doc ID: {ownerUid}_{friendUid}).",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "description": "UID of the user who owns this friend entry" },
+        "friendUid": { "type": "string", "description": "Firebase Auth UID of the connected friend" },
+        "friendMeetUid": { "type": "string", "description": "8-digit Friends Meet UID of the friend" },
+        "friendName": { "type": "string", "description": "Cached friend display name" },
+        "friendPhotoUrl": { "type": "string", "description": "Cached friend photo URL" },
+        "friendOnline": { "type": "boolean", "description": "Cached friend online flag" },
+        "blocked": { "type": "boolean", "description": "True if ownerUid blocked friendUid" },
+        "addedVia": { "type": "string", "enum": ["QR_CODE", "UID_LOOKUP"] },
+        "chatId": { "type": "string", "description": "Canonical 1-to-1 chatId sorted(uidA, uidB)" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid",
+        "friendUid",
+        "friendMeetUid",
+        "friendName",
+        "friendOnline",
+        "blocked",
+        "addedVia",
+        "chatId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatThread": {
+      "title": "ChatThread",
+      "description": "1-to-1 chat room metadata (strictly 2 participants).",
+      "type": "object",
+      "properties": {
+        "participantUids": { "type": "array", "description": "Exactly 2 sorted participant UIDs" },
+        "lastMessageText": { "type": "string", "description": "Encrypted preview or system summary" },
+        "lastMessageType": { "type": "string", "enum": ["TEXT", "VOICE", "IMAGE", "GIF", "STICKER", "REACTION", "QUICK_MESSAGE"] },
+        "lastMessageSenderUid": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "disappearingDurationSeconds": { "type": "integer", "description": "0 (off), 86400 (24h), 604800 (7d), or 7776000 (90d)" },
+        "wallpaperId": { "type": "string" },
+        "themeId": { "type": "string" },
+        "typingUids": { "type": "array", "description": "Active typing UIDs (max 2)" },
+        "e2eeSessionVersion": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "participantUids",
+        "disappearingDurationSeconds",
+        "typingUids",
+        "e2eeSessionVersion",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual 1-to-1 encrypted message inside a chat thread.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "recipientUid": { "type": "string" },
+        "participantUids": { "type": "array", "description": "Denormalized 2-element participant list for local rule evaluation" },
+        "messageType": { "type": "string", "enum": ["TEXT", "VOICE", "IMAGE", "GIF", "STICKER", "REACTION", "QUICK_MESSAGE"] },
+        "ciphertext": { "type": "string", "description": "AES-GCM E2EE base64 ciphertext payload" },
+        "iv": { "type": "string", "description": "Base64 12-byte GCM initialization vector" },
+        "mediaUrl": { "type": "string" },
+        "mediaDurationMs": { "type": "integer" },
+        "replyToMessageId": { "type": "string" },
+        "forwardedCount": { "type": "integer" },
+        "reactions": { "type": "object", "description": "Map of uid to reaction emoji" },
+        "readByUids": { "type": "array" },
+        "deleteForMeUids": { "type": "array" },
+        "deletedForEveryone": { "type": "boolean" },
+        "edited": { "type": "boolean" },
+        "editedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "chatId",
+        "senderUid",
+        "recipientUid",
+        "participantUids",
+        "messageType",
+        "ciphertext",
+        "iv",
+        "readByUids",
+        "deleteForMeUids",
+        "deletedForEveryone",
+        "edited",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CallSession": {
+      "title": "CallSession",
+      "description": "1-to-1 WebRTC audio/video call signaling state.",
+      "type": "object",
+      "properties": {
+        "callerUid": { "type": "string" },
+        "calleeUid": { "type": "string" },
+        "participantUids": { "type": "array", "description": "Exactly 2 UIDs [callerUid, calleeUid]" },
+        "callType": { "type": "string", "enum": ["AUDIO", "VIDEO"] },
+        "status": { "type": "string", "enum": ["RINGING", "ACCEPTED", "DECLINED", "RECONNECTING", "ENDED", "MISSED"] },
+        "offerSdp": { "type": "string" },
+        "answerSdp": { "type": "string" },
+        "e2eeFingerprint": { "type": "string" },
+        "durationSeconds": { "type": "integer" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["callerUid", "calleeUid", "participantUids", "callType", "status", "createdAt", "updatedAt"]
+    },
+    "IceCandidateRecord": {
+      "title": "IceCandidateRecord",
+      "description": "WebRTC trickle ICE candidate scoped to call participants.",
+      "type": "object",
+      "properties": {
+        "callId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "participantUids": { "type": "array" },
+        "sdpMid": { "type": "string" },
+        "sdpMLineIndex": { "type": "integer" },
+        "candidate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["callId", "senderUid", "participantUids", "sdpMid", "sdpMLineIndex", "candidate", "createdAt"]
+    },
+    "FriendTag": {
+      "title": "FriendTag",
+      "description": "Single private active tag per friend (doc ID: {ownerUid}_{friendUid}).",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "friendUid": { "type": "string" },
+        "category": { "type": "string", "description": "Relationship, Location, Office, Work, or custom category" },
+        "label": { "type": "string" },
+        "colorHex": { "type": "string", "description": "Color from predefined Friends Meet palette" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "friendUid", "category", "label", "colorHex", "createdAt", "updatedAt"]
+    },
+    "LetterboxMessage": {
+      "title": "LetterboxMessage",
+      "description": "System-only official Letterbox item (clients cannot create).",
+      "type": "object",
+      "properties": {
+        "recipientUid": { "type": "string" },
+        "category": { "type": "string", "enum": ["GUARDIAN_VERIFICATION", "SECURITY_ALERT", "ACCOUNT_INFO", "SYSTEM_NOTICE"] },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "read": { "type": "boolean" },
+        "trashed": { "type": "boolean" },
+        "trashedAt": { "type": "string", "format": "date-time" },
+        "purgeAfterAt": { "type": "string", "format": "date-time" },
+        "verificationAttempts": { "type": "integer" },
+        "verificationExpiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientUid", "category", "title", "body", "read", "trashed", "createdAt", "updatedAt"]
+    },
+    "LinkedDevice": {
+      "title": "LinkedDevice",
+      "description": "Authorized secondary linked device (max 2 additional devices).",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "devicePlatform": { "type": "string" },
+        "devicePublicKey": { "type": "string" },
+        "active": { "type": "boolean" },
+        "lastSyncedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "deviceName", "devicePlatform", "devicePublicKey", "active", "createdAt", "updatedAt"]
+    },
+    "PrivacySettings": {
+      "title": "PrivacySettings",
+      "description": "User privacy visibility matrix (doc ID: {uid}).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "profileVisibility": { "type": "string", "enum": ["EVERYONE", "FRIENDS", "NOBODY"] },
+        "photoVisibility": { "type": "string", "enum": ["EVERYONE", "FRIENDS", "NOBODY"] },
+        "dobVisibility": { "type": "string", "enum": ["FRIENDS", "NOBODY"] },
+        "onlineStatusVisibility": { "type": "string", "enum": ["EVERYONE", "FRIENDS", "NOBODY"] },
+        "lastSeenVisibility": { "type": "string", "enum": ["EVERYONE", "FRIENDS", "NOBODY"] },
+        "bioVisibility": { "type": "string", "enum": ["EVERYONE", "FRIENDS", "NOBODY"] },
+        "friendListVisibility": { "type": "string", "enum": ["FRIENDS", "NOBODY"] },
+        "phoneVisibility": { "type": "string", "enum": ["FRIENDS", "NOBODY"] },
+        "emailVisibility": { "type": "string", "enum": ["FRIENDS", "NOBODY"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "profileVisibility",
+        "photoVisibility",
+        "dobVisibility",
+        "onlineStatusVisibility",
+        "lastSeenVisibility",
+        "bioVisibility",
+        "friendListVisibility",
+        "phoneVisibility",
+        "emailVisibility",
+        "updatedAt"
+      ]
+    },
+    "NotificationEvent": {
+      "title": "NotificationEvent",
+      "description": "In-app & push notification trigger log.",
+      "type": "object",
+      "properties": {
+        "recipientUid": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "type": { "type": "string", "enum": ["REACTION", "MESSAGE", "CALL", "LETTERBOX"] },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "targetId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientUid", "senderUid", "type", "title", "body", "read", "createdAt"]
+    },
+    "BackupMetadata": {
+      "title": "BackupMetadata",
+      "description": "Encrypted backup manifest stored in Firebase Storage (doc ID: {uid}).",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "keyChecksumSha256": { "type": "string" },
+        "encryptionAlgorithm": { "type": "string" },
+        "messageCount": { "type": "integer" },
+        "sizeBytes": { "type": "integer" },
+        "lastBackupAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "storagePath", "keyChecksumSha256", "encryptionAlgorithm", "messageCount", "sizeBytes", "lastBackupAt", "updatedAt"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User UI theme, custom quick messages, and chat defaults (doc ID: {uid}).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "themeMode": { "type": "string", "enum": ["SYSTEM", "LIGHT", "DARK"] },
+        "quickMessages": { "type": "array", "description": "Ordered custom & default quick messages (max 30)" },
+        "customTagCategories": { "type": "array", "description": "User-defined friend tag categories (max 20)" },
+        "defaultChatWallpaper": { "type": "string" },
+        "translationAutoDetect": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "themeMode", "quickMessages", "customTagCategories", "translationAutoDetect", "updatedAt"]
+    },
+    "DeviceLinkToken": {
+      "title": "DeviceLinkToken",
+      "description": "Short-lived single-use QR pairing token for linked devices (never contains permanent credentials).",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "tokenId": { "type": "string" },
+        "primaryDevicePublicKey": { "type": "string" },
+        "used": { "type": "boolean" },
+        "redeemedByDeviceId": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "tokenId", "primaryDevicePublicKey", "used", "expiresAt", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile and registration record isolated to owner."
+    },
+    "/userIds/{friendsMeetUid}": {
+      "schema": { "$ref": "#/entities/UserIdDirectoryEntry" },
+      "description": "8-digit numeric UID lookup registry without PII."
+    },
+    "/friends/{connectionId}": {
+      "schema": { "$ref": "#/entities/FriendConnection" },
+      "description": "User-owned friend connection records."
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/ChatThread" },
+      "description": "1-to-1 chat threads scoped to 2 participants."
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Paginated 1-to-1 chat messages with denormalized participantUids."
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/CallSession" },
+      "description": "1-to-1 WebRTC call signaling sessions."
+    },
+    "/calls/{callId}/iceCandidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/IceCandidateRecord" },
+      "description": "Trickle ICE candidates for an active call."
+    },
+    "/friendTags/{tagId}": {
+      "schema": { "$ref": "#/entities/FriendTag" },
+      "description": "Private single active tag per friend."
+    },
+    "/letterbox/{letterId}": {
+      "schema": { "$ref": "#/entities/LetterboxMessage" },
+      "description": "Official system-controlled Letterbox (client create blocked)."
+    },
+    "/linkedDevices/{deviceId}": {
+      "schema": { "$ref": "#/entities/LinkedDevice" },
+      "description": "Authorized secondary linked devices (max 2)."
+    },
+    "/deviceLinkTokens/{tokenId}": {
+      "schema": { "$ref": "#/entities/DeviceLinkToken" },
+      "description": "Short-lived single-use QR tokens for linking devices."
+    },
+    "/privacySettings/{uid}": {
+      "schema": { "$ref": "#/entities/PrivacySettings" },
+      "description": "Per-field privacy configuration for each user."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationEvent" },
+      "description": "In-app and push notification event records."
+    },
+    "/backupMetadata/{uid}": {
+      "schema": { "$ref": "#/entities/BackupMetadata" },
+      "description": "Encrypted backup manifest metadata."
+    },
+    "/userSettings/{uid}": {
+      "schema": { "$ref": "#/entities/UserSettings" },
+      "description": "Theme mode, quick messages, and app preferences."
+    }
+  }
+}

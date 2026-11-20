@@ -1,0 +1,115 @@
+name: Build Debug APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-debug-apk:
+    name: Assemble Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Verify Java environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          echo "JAVA_HOME=${JAVA_HOME:-}"
+          JAVA_VER_LINE="$(java -version 2>&1 | head -n 1)"
+          JAVA_MAJOR="$(echo "$JAVA_VER_LINE" | sed -E 's/.*"([0-9]+).*/\1/')"
+          if ! [[ "$JAVA_MAJOR" =~ ^[0-9]+$ ]] || [ "$JAVA_MAJOR" -lt 17 ]; then
+            echo "::error::Java 17 or newer is required, but detected: $JAVA_VER_LINE"
+            exit 1
+          fi
+          echo "Confirmed active Java major version: $JAVA_MAJOR"
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Create temporary debug keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "./debug.keystore" ]; then
+            echo "Debug keystore already exists."
+          else
+            KEYTOOL_BIN="${JAVA_HOME}/bin/keytool"
+            if [ ! -x "$KEYTOOL_BIN" ]; then
+              KEYTOOL_BIN="keytool"
+            fi
+            "$KEYTOOL_BIN" -genkeypair \
+              -keystore ./debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 >/dev/null 2>&1 || {
+                echo "::error::Failed to create temporary debug keystore at ./debug.keystore"
+                exit 1
+              }
+          fi
+          if [ ! -f "./debug.keystore" ]; then
+            echo "::error::Temporary debug keystore ./debug.keystore does not exist after generation."
+            exit 1
+          fi
+          echo "Confirmed ./debug.keystore exists."
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER_BIN=""
+          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER_BIN="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          elif [ -x "$SDK_ROOT/tools/bin/sdkmanager" ]; then
+            SDKMANAGER_BIN="$SDK_ROOT/tools/bin/sdkmanager"
+          fi
+          if [ -n "$SDKMANAGER_BIN" ]; then
+            yes | "$SDKMANAGER_BIN" --licenses >/dev/null 2>&1 || true
+            "$SDKMANAGER_BIN" --install "platforms;android-36.1" "build-tools;36.0.0" || true
+          fi
+
+      - name: Build debug APK
+        shell: bash
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify debug APK output
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$TARGET_APK" ]; then
+            echo "::error::Expected debug APK is missing at $TARGET_APK"
+            if [ -d "app/build/outputs/apk" ]; then
+              echo "Discovered APK paths under app/build/outputs/apk:"
+              find app/build/outputs/apk -type f -name "*.apk" -print || true
+            else
+              echo "Directory app/build/outputs/apk does not exist."
+            fi
+            exit 1
+          fi
+          echo "Verified debug APK at $TARGET_APK"
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

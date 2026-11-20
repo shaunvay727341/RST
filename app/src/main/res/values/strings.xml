@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Friends Meet</string>
+    <string name="auth_headline">Connect closely, speak freely.</string>
+    <string name="auth_subtitle">Private 1-to-1 chats, crystal-clear calls, and instant QR friend discovery powered by Firebase.</string>
+    <string name="auth_feature_uid_title">8-Digit Friends Meet UID &amp; QR</string>
+    <string name="auth_feature_uid_desc">Connect instantly without exposing your phone number or email.</string>
+    <string name="auth_feature_e2ee_title">End-to-End Protected</string>
+    <string name="auth_feature_e2ee_desc">Hardware-backed keys, zero-trust Firestore rules, and official Letterbox alerts.</string>
+    <string name="auth_feature_google_title">Google Sign-In Only</string>
+    <string name="auth_feature_google_desc">Fast, passwordless authentication via Android Credential Manager.</string>
+    <string name="auth_continue_google">Continue with Google</string>
+    <string name="auth_signing_in">Signing in…</string>
+    <string name="phase1_subtitle">Phase 1 · Architecture &amp; Firebase Foundation</string>
+    <string name="phase1_connected_title">Firebase Backend Connected</string>
+    <string name="theme_selector_title">Appearance</string>
+    <string name="cd_toggle_theme">Toggle theme</string>
+    <string name="cd_friends_hero_illustration">Friends Meet illustration</string>
+    <string name="cd_sign_out">Sign out</string>
+    <string name="onesignal_app_id" translatable="false">a9f87693-c95c-425a-8c23-04025f72d613</string>
+    <string name="push_notifications_title">OneSignal Push Notifications</string>
+    <string name="push_notifications_enabled">Subscribed &amp; Ready</string>
+    <string name="push_notifications_disabled">Permission Required</string>
+    <string name="push_enable_button">Enable Push Notifications</string>
+    <string name="cd_notifications">Push notifications</string>
+</resources>

@@ -1,0 +1,18 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-android-friendsm-e9b1a466-7cfb-4f1f-9f62-5f4440dae04f",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    }
+  ],
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8085
+    },
+    "ui": {
+      "enabled": false
+    }
+  }
+}
